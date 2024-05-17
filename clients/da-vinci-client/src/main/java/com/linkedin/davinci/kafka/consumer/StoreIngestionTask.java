@@ -3337,6 +3337,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     if (emitMetrics.get() && recordLevelMetricEnabled.get()) {
       hostLevelIngestionStats.recordKeySize(keyLen, currentTimeMs);
       hostLevelIngestionStats.recordValueSize(valueLen, currentTimeMs);
+      hostLevelIngestionStats.recordAssembledValueSize(valueLen, currentTimeMs); // TODO: properly track assembled value
     }
 
     return keyLen + valueLen;
