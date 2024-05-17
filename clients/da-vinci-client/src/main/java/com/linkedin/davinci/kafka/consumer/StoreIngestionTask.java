@@ -86,9 +86,11 @@ import com.linkedin.venice.pubsub.manager.TopicManager;
 import com.linkedin.venice.pubsub.manager.TopicManagerRepository;
 import com.linkedin.venice.schema.SchemaEntry;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
+import com.linkedin.venice.serialization.avro.ChunkedValueManifestSerializer;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serializer.AvroGenericDeserializer;
 import com.linkedin.venice.serializer.FastSerializerDeserializerFactory;
+import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
 import com.linkedin.venice.system.store.MetaStoreWriter;
 import com.linkedin.venice.utils.ByteUtils;
 import com.linkedin.venice.utils.ComplementSet;
@@ -320,6 +322,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   protected final StorageEngineBackedCompressorFactory compressorFactory;
   protected final Lazy<VeniceCompressor> compressor;
   protected final boolean isChunked;
+  protected final ChunkedValueManifestSerializer manifestSerializer;
   protected final PubSubTopicRepository pubSubTopicRepository;
   private final String[] msgForLagMeasurement;
   private final Runnable runnableForKillIngestionTasksForNonCurrentVersions;
@@ -475,6 +478,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     this.compressorFactory = builder.getCompressorFactory();
     this.compressor = Lazy.of(() -> compressorFactory.getCompressor(compressionStrategy, kafkaVersionTopic));
     this.isChunked = version.isChunkingEnabled();
+    this.manifestSerializer = new ChunkedValueManifestSerializer(true);
     this.msgForLagMeasurement = new String[subPartitionCount];
     for (int i = 0; i < this.msgForLagMeasurement.length; i++) {
       this.msgForLagMeasurement[i] = kafkaVersionTopic + "_" + i;
@@ -3263,6 +3267,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               LatencyUtils.getElapsedTimeInMs(recordTransformStartTime),
               currentTimeMs);
           writeToStorageEngine(producedPartition, keyBytes, put);
+
+          if (metricsEnabled && recordLevelMetricEnabled.get()
+              && putSchemaId == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
+            ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
+                ByteUtils.extractByteArray(valueBytes),
+                AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
+            hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
+          }
         } else {
           prependHeaderAndWriteToStorageEngine(
               // Leaders might consume from a RT topic and immediately write into StorageEngine,
