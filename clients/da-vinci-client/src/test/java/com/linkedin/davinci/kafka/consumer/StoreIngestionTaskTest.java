@@ -163,12 +163,14 @@ import com.linkedin.venice.schema.rmd.RmdSchemaEntry;
 import com.linkedin.venice.schema.rmd.RmdSchemaGenerator;
 import com.linkedin.venice.serialization.DefaultSerializer;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
+import com.linkedin.venice.serialization.avro.ChunkedValueManifestSerializer;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serialization.avro.OptimizedKafkaValueSerializer;
 import com.linkedin.venice.serialization.avro.VeniceAvroKafkaSerializer;
 import com.linkedin.venice.serializer.FastSerializerDeserializerFactory;
 import com.linkedin.venice.serializer.RecordSerializer;
 import com.linkedin.venice.stats.StatsErrorCode;
+import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
 import com.linkedin.venice.throttle.EventThrottler;
 import com.linkedin.venice.unit.kafka.InMemoryKafkaBroker;
 import com.linkedin.venice.unit.kafka.SimplePartitioner;
@@ -4421,6 +4423,70 @@ public abstract class StoreIngestionTaskTest {
     // Verify transformer error was recorded
     verify(mockVersionedStorageIngestionStats)
         .recordTransformerError(eq(storeNameWithoutVersionInfo), anyInt(), anyDouble(), anyLong());
+  }
+
+  @Test(dataProvider = "aaConfigProvider")
+  public void testAssembledValueSizeSensor(AAConfig aaConfig) throws Exception {
+    KafkaKey kafkaKey = new KafkaKey(MessageType.PUT, putKeyFoo);
+    KafkaMessageEnvelope kafkaMessageEnvelope = new KafkaMessageEnvelope();
+    kafkaMessageEnvelope.messageType = MessageType.PUT.getValue();
+
+    String topicName = "testStore_v1";
+    ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
+    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
+    chunkedValueManifest.size = 999;
+    chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
+    ChunkedValueManifestSerializer chunkedValueManifestSerializer = new ChunkedValueManifestSerializer(true);
+    byte[] chunkedValueManifestBytes = chunkedValueManifestSerializer.serialize(topicName, chunkedValueManifest);
+
+    Put put = new Put();
+    put.putValue = ByteBuffer.wrap(chunkedValueManifestBytes);
+    put.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    put.replicationMetadataPayload = ByteBuffer.allocate(chunkedValueManifestBytes.length);
+    kafkaMessageEnvelope.payloadUnion = put;
+    kafkaMessageEnvelope.producerMetadata = new ProducerMetadata();
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessage = new ImmutablePubSubMessage(
+        kafkaKey,
+        kafkaMessageEnvelope,
+        new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO),
+        0,
+        0,
+        0);
+
+    LeaderProducedRecordContext leaderProducedRecordContext = mock(LeaderProducedRecordContext.class);
+    when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
+    when(leaderProducedRecordContext.getValueUnion()).thenReturn(put);
+    when(leaderProducedRecordContext.getKeyBytes()).thenReturn(putKeyFoo);
+
+    Schema keySchema = Schema.create(Schema.Type.INT);
+    SchemaEntry keySchemaEntry = mock(SchemaEntry.class);
+    when(keySchemaEntry.getSchema()).thenReturn(keySchema);
+    when(mockSchemaRepo.getKeySchema(storeNameWithoutVersionInfo)).thenReturn(keySchemaEntry);
+
+    Schema valueSchema = Schema.create(Schema.Type.STRING);
+    SchemaEntry valueSchemaEntry = mock(SchemaEntry.class);
+    when(valueSchemaEntry.getSchema()).thenReturn(valueSchema);
+    when(mockSchemaRepo.getValueSchema(eq(storeNameWithoutVersionInfo), anyInt())).thenReturn(valueSchemaEntry);
+
+    runTest(Collections.singleton(PARTITION_FOO), () -> {
+      TestUtils.waitForNonDeterministicAssertion(
+          5,
+          TimeUnit.SECONDS,
+          () -> assertTrue(storeIngestionTaskUnderTest.hasAnySubscription()));
+
+      try {
+        storeIngestionTaskUnderTest.produceToStoreBufferService(
+            pubSubMessage,
+            leaderProducedRecordContext,
+            PARTITION_FOO,
+            localKafkaConsumerService.kafkaUrl,
+            System.nanoTime(),
+            System.currentTimeMillis());
+      } catch (InterruptedException e) {
+        throw new VeniceException(e);
+      }
+    }, aaConfig, (storeVersion) -> new TestAvroRecordTransformer(storeVersion));
   }
 
   @Test

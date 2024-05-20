@@ -3269,7 +3269,8 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
           writeToStorageEngine(producedPartition, keyBytes, put);
 
           if (metricsEnabled && recordLevelMetricEnabled.get()
-              && putSchemaId == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
+              && put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
+            // TODO: error handling
             ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
                 ByteUtils.extractByteArray(valueBytes),
                 AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
