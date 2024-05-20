@@ -3267,15 +3267,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               LatencyUtils.getElapsedTimeInMs(recordTransformStartTime),
               currentTimeMs);
           writeToStorageEngine(producedPartition, keyBytes, put);
-
-          if (metricsEnabled && recordLevelMetricEnabled.get()
-              && put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
-            // TODO: error handling
-            ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
-                ByteUtils.extractByteArray(valueBytes),
-                AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
-            hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
-          }
         } else {
           prependHeaderAndWriteToStorageEngine(
               // Leaders might consume from a RT topic and immediately write into StorageEngine,
@@ -3293,6 +3284,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
         if (metricsEnabled && recordLevelMetricEnabled.get()) {
           hostLevelIngestionStats
               .recordStorageEnginePutLatency(LatencyUtils.getLatencyInMS(startTimeNs), currentTimeMs);
+
+          if (put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
+            // TODO: error handling
+            ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
+                ByteUtils.extractByteArray(put.getPutValue()),
+                AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
+            hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
+          }
         }
         break;
 
@@ -3350,7 +3349,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     if (emitMetrics.get() && recordLevelMetricEnabled.get()) {
       hostLevelIngestionStats.recordKeySize(keyLen, currentTimeMs);
       hostLevelIngestionStats.recordValueSize(valueLen, currentTimeMs);
-      hostLevelIngestionStats.recordAssembledValueSize(valueLen, currentTimeMs); // TODO: properly track assembled value
     }
 
     return keyLen + valueLen;
