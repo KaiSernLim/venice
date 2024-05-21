@@ -3286,11 +3286,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               .recordStorageEnginePutLatency(LatencyUtils.getLatencyInMS(startTimeNs), currentTimeMs);
 
           if (put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
-            // TODO: error handling
-            ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
-                ByteUtils.extractByteArray(put.getPutValue()),
-                AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
-            hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
+            try {
+              ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
+                  ByteUtils.extractByteArray(put.getPutValue()),
+                  AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
+              hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
+            } catch (VeniceException | IllegalArgumentException e) {
+              LOGGER.error("Failed to deserialize ChunkedValueManifest to record assembled value size", e);
+            }
           }
         }
         break;
