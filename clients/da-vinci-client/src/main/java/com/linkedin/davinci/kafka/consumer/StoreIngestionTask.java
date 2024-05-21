@@ -3219,6 +3219,18 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
         // update checksum for this PUT message if needed.
         partitionConsumptionState.maybeUpdateExpectedChecksum(keyBytes, put);
 
+        if (metricsEnabled && recordLevelMetricEnabled.get()
+            && put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
+          try {
+            ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
+                ByteUtils.extractByteArray(put.getPutValue()), // must be done before recordTransformer changes putValue
+                AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
+            hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
+          } catch (VeniceException | IllegalArgumentException e) {
+            LOGGER.error("Failed to deserialize ChunkedValueManifest to record assembled value size", e);
+          }
+        }
+
         // Check if put.getSchemaId is positive, if not default to 1
         int putSchemaId = put.getSchemaId() > 0 ? put.getSchemaId() : 1;
 
@@ -3284,17 +3296,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
         if (metricsEnabled && recordLevelMetricEnabled.get()) {
           hostLevelIngestionStats
               .recordStorageEnginePutLatency(LatencyUtils.getLatencyInMS(startTimeNs), currentTimeMs);
-
-          if (put.getSchemaId() == AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion()) {
-            try {
-              ChunkedValueManifest chunkedValueManifest = manifestSerializer.deserialize(
-                  ByteUtils.extractByteArray(put.getPutValue()),
-                  AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion());
-              hostLevelIngestionStats.recordAssembledValueSize(chunkedValueManifest.getSize(), currentTimeMs);
-            } catch (VeniceException | IllegalArgumentException e) {
-              LOGGER.error("Failed to deserialize ChunkedValueManifest to record assembled value size", e);
-            }
-          }
         }
         break;
 
