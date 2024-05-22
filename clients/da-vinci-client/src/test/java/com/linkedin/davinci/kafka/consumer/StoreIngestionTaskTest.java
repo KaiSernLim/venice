@@ -4685,6 +4685,39 @@ public abstract class StoreIngestionTaskTest {
         "If the partition has messages in it, and we consumed some of them, we expect lag to equal the unconsumed message count.");
   }
 
+  @Test(dataProvider = "aaConfigProvider")
+  public void testAssembledValueSizeSensor2(AAConfig aaConfig) throws Exception {
+    int assembledRecordSize = 999;
+    ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
+    chunkedValueManifest.size = assembledRecordSize;
+    chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
+    chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
+    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    byte[] valueBytes;
+    try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
+      valueBytes = serializer.serialize(topic, chunkedValueManifest);
+    }
+
+    VeniceWriter vtWriter = getVeniceWriter(new MockInMemoryProducerAdapter(inMemoryLocalKafkaBroker));
+    vtWriter.broadcastStartOfPush(Collections.emptyMap());
+    vtWriter.put(putKeyFoo, valueBytes, EXISTING_SCHEMA_ID).get();
+    // vtWriter.broadcastEndOfPush(Collections.emptyMap());
+    HybridStoreConfig hybridStoreConfig = new HybridStoreConfigImpl(
+        -1,
+        100,
+        HybridStoreConfigImpl.DEFAULT_HYBRID_TIME_LAG_THRESHOLD,
+        DataReplicationPolicy.NON_AGGREGATE,
+        BufferReplayPolicy.REWIND_FROM_EOP);
+
+    Map<String, Object> extraProps = new HashMap();
+    runTest(new RandomPollStrategy(), Utils.setOf(PARTITION_FOO), () -> {}, () -> {
+      verify(mockAbstractStorageEngine, timeout(TEST_TIMEOUT_MS))
+          .put(PARTITION_FOO, putKeyFoo2, ByteBuffer.wrap(ValueRecord.create(SCHEMA_ID, putValue).serialize()));
+      // verify(storeIngestionTaskUnderTest.hostLevelIngestionStats)
+      // .recordAssembledValueSize(eq((long) assembledRecordSize), anyLong());
+    }, Optional.of(hybridStoreConfig), false, Optional.empty(), AA_OFF, 1, extraProps);
+  }
+
   private VeniceStoreVersionConfig getDefaultMockVeniceStoreVersionConfig(
       Consumer<VeniceStoreVersionConfig> storeVersionConfigOverride) {
     // mock the store config
