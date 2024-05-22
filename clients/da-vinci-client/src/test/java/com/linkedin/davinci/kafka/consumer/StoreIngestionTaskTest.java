@@ -4425,28 +4425,31 @@ public abstract class StoreIngestionTaskTest {
         .recordTransformerError(eq(storeNameWithoutVersionInfo), anyInt(), anyDouble(), anyLong());
   }
 
-  @Test(dataProvider = "aaConfigProvider")
-  public void testAssembledValueSizeSensor(AAConfig aaConfig) throws Exception {
+  @Test
+  public void testAssembledValueSizeSensor() throws Exception {
     KafkaKey kafkaKey = new KafkaKey(MessageType.PUT, putKeyFoo);
     KafkaMessageEnvelope kafkaMessageEnvelope = new KafkaMessageEnvelope();
     kafkaMessageEnvelope.messageType = MessageType.PUT.getValue();
 
+    int assembledRecordSize = 999;
     String topicName = "testStore_v1";
     ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
-    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    chunkedValueManifest.size = assembledRecordSize;
     chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
-    chunkedValueManifest.size = 999;
     chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
-    ChunkedValueManifestSerializer chunkedValueManifestSerializer = new ChunkedValueManifestSerializer(true);
-    byte[] chunkedValueManifestBytes = chunkedValueManifestSerializer.serialize(topicName, chunkedValueManifest);
+    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    byte[] valueBytes;
+    try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
+      valueBytes = serializer.serialize(topicName, chunkedValueManifest);
+    }
 
     Put put = new Put();
-    put.putValue = ByteBuffer.wrap(chunkedValueManifestBytes);
+    put.putValue = ByteBuffer.wrap(valueBytes);
     put.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
-    put.replicationMetadataPayload = ByteBuffer.allocate(chunkedValueManifestBytes.length);
+    put.replicationMetadataPayload = ByteBuffer.allocate(valueBytes.length);
     kafkaMessageEnvelope.payloadUnion = put;
     kafkaMessageEnvelope.producerMetadata = new ProducerMetadata();
-    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessage = new ImmutablePubSubMessage(
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessage = new ImmutablePubSubMessage<>(
         kafkaKey,
         kafkaMessageEnvelope,
         new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO),
@@ -4458,16 +4461,6 @@ public abstract class StoreIngestionTaskTest {
     when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
     when(leaderProducedRecordContext.getValueUnion()).thenReturn(put);
     when(leaderProducedRecordContext.getKeyBytes()).thenReturn(putKeyFoo);
-
-    Schema keySchema = Schema.create(Schema.Type.INT);
-    SchemaEntry keySchemaEntry = mock(SchemaEntry.class);
-    when(keySchemaEntry.getSchema()).thenReturn(keySchema);
-    when(mockSchemaRepo.getKeySchema(storeNameWithoutVersionInfo)).thenReturn(keySchemaEntry);
-
-    Schema valueSchema = Schema.create(Schema.Type.STRING);
-    SchemaEntry valueSchemaEntry = mock(SchemaEntry.class);
-    when(valueSchemaEntry.getSchema()).thenReturn(valueSchema);
-    when(mockSchemaRepo.getValueSchema(eq(storeNameWithoutVersionInfo), anyInt())).thenReturn(valueSchemaEntry);
 
     runTest(Collections.singleton(PARTITION_FOO), () -> {
       TestUtils.waitForNonDeterministicAssertion(
@@ -4486,7 +4479,10 @@ public abstract class StoreIngestionTaskTest {
       } catch (InterruptedException e) {
         throw new VeniceException(e);
       }
-    }, aaConfig, (storeVersion) -> new TestAvroRecordTransformer(storeVersion));
+    }, AA_ON);
+
+    verify(storeIngestionTaskUnderTest.hostLevelIngestionStats)
+        .recordAssembledValueSize(eq((long) assembledRecordSize), anyLong());
   }
 
   @Test
