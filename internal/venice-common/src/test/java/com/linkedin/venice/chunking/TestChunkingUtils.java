@@ -106,7 +106,7 @@ public class TestChunkingUtils {
     ChunkedValueManifestSerializer chunkedValueManifestSerializer = new ChunkedValueManifestSerializer(true);
     ChunkedValueManifest manifest = new ChunkedValueManifest();
     manifest.keysWithChunkIdSuffix = new ArrayList<>(numberOfChunks);
-    manifest.schemaId = 1;
+    manifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
     manifest.size = chunkLength * numberOfChunks;
 
     manifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(firstMessage.getKey().getKey()));

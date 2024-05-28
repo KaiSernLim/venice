@@ -87,22 +87,23 @@ public class TestKafkaTopicDumper {
         false,
         false);
 
+    int numChunks = 3;
     String metadataFormat = " ChunkMd=(type:%s, FirstChunkMd=(guid:00000000000000000000000000000000,seg:1,seq:1))";
-    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessageChunk = null;
-    for (int i = 0; i < 3; i++) {
-      pubSubMessageChunk = TestChunkingUtils.createChunkedRecord(serializedKey, 1, 1, i, 0, pubSubTopicPartition);
-      String metadataLog = kafkaTopicDumper.getChunkMetadataLog(pubSubMessageChunk);
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> chunkMessage = null;
+    for (int i = 0; i < numChunks; i++) {
+      chunkMessage = TestChunkingUtils.createChunkedRecord(serializedKey, 1, 1, i, 0, pubSubTopicPartition);
+      String metadataLog = kafkaTopicDumper.getChunkMetadataLog(chunkMessage);
       Assert.assertEquals(metadataLog, String.format(metadataFormat, "WITH_VALUE_CHUNK, ChunkIndex: " + i));
     }
 
-    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessageManifest =
-        TestChunkingUtils.createChunkValueManifestRecord(serializedKey, pubSubMessageChunk, 1, pubSubTopicPartition);
-    String manifestChunkMetadataLog = kafkaTopicDumper.getChunkMetadataLog(pubSubMessageManifest);
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> manifestMessage =
+        TestChunkingUtils.createChunkValueManifestRecord(serializedKey, chunkMessage, numChunks, pubSubTopicPartition);
+    String manifestChunkMetadataLog = kafkaTopicDumper.getChunkMetadataLog(manifestMessage);
     Assert.assertEquals(manifestChunkMetadataLog, String.format(metadataFormat, "WITH_CHUNK_MANIFEST"));
 
-    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessageDelete =
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> deleteMessage =
         TestChunkingUtils.createDeleteRecord(serializedKey, null, pubSubTopicPartition);
-    String deleteChunkMetadataLog = kafkaTopicDumper.getChunkMetadataLog(pubSubMessageDelete);
+    String deleteChunkMetadataLog = kafkaTopicDumper.getChunkMetadataLog(deleteMessage);
     Assert.assertEquals(deleteChunkMetadataLog, " ChunkMd=(type:WITH_FULL_VALUE)");
   }
 

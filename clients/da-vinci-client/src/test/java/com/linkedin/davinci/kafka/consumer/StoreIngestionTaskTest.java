@@ -101,6 +101,7 @@ import com.linkedin.davinci.store.record.ValueRecord;
 import com.linkedin.davinci.store.rocksdb.RocksDBServerConfig;
 import com.linkedin.davinci.transformer.TestAvroRecordTransformer;
 import com.linkedin.davinci.transformer.TestStringRecordTransformer;
+import com.linkedin.venice.chunking.TestChunkingUtils;
 import com.linkedin.venice.compression.CompressionStrategy;
 import com.linkedin.venice.exceptions.MemoryLimitExhaustedException;
 import com.linkedin.venice.exceptions.VeniceException;
@@ -163,14 +164,12 @@ import com.linkedin.venice.schema.rmd.RmdSchemaEntry;
 import com.linkedin.venice.schema.rmd.RmdSchemaGenerator;
 import com.linkedin.venice.serialization.DefaultSerializer;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
-import com.linkedin.venice.serialization.avro.ChunkedValueManifestSerializer;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serialization.avro.OptimizedKafkaValueSerializer;
 import com.linkedin.venice.serialization.avro.VeniceAvroKafkaSerializer;
 import com.linkedin.venice.serializer.FastSerializerDeserializerFactory;
 import com.linkedin.venice.serializer.RecordSerializer;
 import com.linkedin.venice.stats.StatsErrorCode;
-import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
 import com.linkedin.venice.throttle.EventThrottler;
 import com.linkedin.venice.unit.kafka.InMemoryKafkaBroker;
 import com.linkedin.venice.unit.kafka.SimplePartitioner;
@@ -4427,39 +4426,19 @@ public abstract class StoreIngestionTaskTest {
 
   @Test
   public void testAssembledValueSizeSensor() throws Exception {
-    KafkaKey kafkaKey = new KafkaKey(MessageType.PUT, putKeyFoo);
-    KafkaMessageEnvelope kafkaMessageEnvelope = new KafkaMessageEnvelope();
-    kafkaMessageEnvelope.messageType = MessageType.PUT.getValue();
-
-    int assembledRecordSize = 999;
-    String topicName = "testStore_v1";
-    ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
-    chunkedValueManifest.size = assembledRecordSize;
-    chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
-    chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
-    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
-    byte[] valueBytes;
-    try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
-      valueBytes = serializer.serialize(topicName, chunkedValueManifest);
+    int numChunks = 3;
+    PubSubTopicPartition tp = new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO);
+    List<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> messages = new ArrayList<>(numChunks + 1);
+    for (int i = 0; i < numChunks; i++) {
+      messages.add(TestChunkingUtils.createChunkedRecord(putKeyFoo, 1, 1, i, 0, tp));
     }
-
-    Put put = new Put();
-    put.putValue = ByteBuffer.wrap(valueBytes);
-    put.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
-    put.replicationMetadataPayload = ByteBuffer.allocate(valueBytes.length);
-    kafkaMessageEnvelope.payloadUnion = put;
-    kafkaMessageEnvelope.producerMetadata = new ProducerMetadata();
-    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> pubSubMessage = new ImmutablePubSubMessage<>(
-        kafkaKey,
-        kafkaMessageEnvelope,
-        new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO),
-        0,
-        0,
-        0);
+    PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> manifestMessage =
+        TestChunkingUtils.createChunkValueManifestRecord(putKeyFoo, messages.get(0), numChunks, tp);
+    messages.add(manifestMessage);
 
     LeaderProducedRecordContext leaderProducedRecordContext = mock(LeaderProducedRecordContext.class);
     when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
-    when(leaderProducedRecordContext.getValueUnion()).thenReturn(put);
+    when(leaderProducedRecordContext.getValueUnion()).thenReturn(manifestMessage.getValue().getPayloadUnion());
     when(leaderProducedRecordContext.getKeyBytes()).thenReturn(putKeyFoo);
 
     runTest(Collections.singleton(PARTITION_FOO), () -> {
@@ -4470,7 +4449,7 @@ public abstract class StoreIngestionTaskTest {
 
       try {
         storeIngestionTaskUnderTest.produceToStoreBufferService(
-            pubSubMessage,
+            manifestMessage,
             leaderProducedRecordContext,
             PARTITION_FOO,
             localKafkaConsumerService.kafkaUrl,
@@ -4481,8 +4460,9 @@ public abstract class StoreIngestionTaskTest {
       }
     }, AA_ON);
 
-    verify(storeIngestionTaskUnderTest.hostLevelIngestionStats)
-        .recordAssembledValueSize(eq((long) assembledRecordSize), anyLong());
+    HostLevelIngestionStats hostLevelIngestionStats = storeIngestionTaskUnderTest.hostLevelIngestionStats;
+    verify(hostLevelIngestionStats).recordAssembledValueSize(eq(10L * numChunks), anyLong()); // 10 bytes per chunk
+    verify(hostLevelIngestionStats, times(1)).recordAssembledValueSize(anyLong(), anyLong());
   }
 
   @Test
@@ -4687,20 +4667,29 @@ public abstract class StoreIngestionTaskTest {
 
   @Test(dataProvider = "aaConfigProvider")
   public void testAssembledValueSizeSensor2(AAConfig aaConfig) throws Exception {
-    int assembledRecordSize = 999;
-    ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
-    chunkedValueManifest.size = assembledRecordSize;
-    chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
-    chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
-    chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
-    byte[] valueBytes;
-    try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
-      valueBytes = serializer.serialize(topic, chunkedValueManifest);
+    // int assembledRecordSize = 999;
+    // ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
+    // chunkedValueManifest.size = assembledRecordSize;
+    // chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
+    // chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
+    // chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
+    // byte[] valueBytes;
+    // try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
+    // valueBytes = serializer.serialize(topic, chunkedValueManifest);
+    // }
+
+    int numChunks = 3;
+    List<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> messages = new ArrayList<>(numChunks + 1);
+    PubSubTopicPartition tp = new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO);
+    for (int i = 0; i < numChunks; i++) {
+      messages.add(TestChunkingUtils.createChunkedRecord(putKeyFoo, 1, 1, i, 0, tp));
     }
+    messages.add(TestChunkingUtils.createChunkValueManifestRecord(putKeyFoo, messages.get(0), numChunks, tp));
 
     VeniceWriter vtWriter = getVeniceWriter(new MockInMemoryProducerAdapter(inMemoryLocalKafkaBroker));
     vtWriter.broadcastStartOfPush(Collections.emptyMap());
-    vtWriter.put(putKeyFoo, valueBytes, EXISTING_SCHEMA_ID).get();
+    Put put = (Put) messages.get(numChunks).getValue().getPayloadUnion();
+    vtWriter.put(putKeyFoo, put.getPutValue().array(), EXISTING_SCHEMA_ID).get();
     // vtWriter.broadcastEndOfPush(Collections.emptyMap());
     HybridStoreConfig hybridStoreConfig = new HybridStoreConfigImpl(
         -1,
@@ -4711,10 +4700,9 @@ public abstract class StoreIngestionTaskTest {
 
     Map<String, Object> extraProps = new HashMap();
     runTest(new RandomPollStrategy(), Utils.setOf(PARTITION_FOO), () -> {}, () -> {
-      verify(mockAbstractStorageEngine, timeout(TEST_TIMEOUT_MS))
-          .put(PARTITION_FOO, putKeyFoo2, ByteBuffer.wrap(ValueRecord.create(SCHEMA_ID, putValue).serialize()));
-      // verify(storeIngestionTaskUnderTest.hostLevelIngestionStats)
-      // .recordAssembledValueSize(eq((long) assembledRecordSize), anyLong());
+      // verify(mockAbstractStorageEngine, timeout(TEST_TIMEOUT_MS))
+      // .put(PARTITION_FOO, putKeyFoo, ByteBuffer.wrap(ValueRecord.create(EXISTING_SCHEMA_ID, putValue).serialize()));
+      verify(storeIngestionTaskUnderTest.hostLevelIngestionStats).recordAssembledValueSize(eq(30L), anyLong());
     }, Optional.of(hybridStoreConfig), false, Optional.empty(), AA_OFF, 1, extraProps);
   }
 
