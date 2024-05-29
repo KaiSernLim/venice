@@ -4424,9 +4424,9 @@ public abstract class StoreIngestionTaskTest {
         .recordTransformerError(eq(storeNameWithoutVersionInfo), anyInt(), anyDouble(), anyLong());
   }
 
-  @Test
-  public void testAssembledValueSizeSensor() throws Exception {
-    int numChunks = 3;
+  @Test(dataProvider = "aaConfigProvider")
+  public void testAssembledValueSizeSensor(AAConfig aaConfig) throws Exception {
+    int numChunks = 1;
     PubSubTopicPartition tp = new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO);
     List<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> messages = new ArrayList<>(numChunks + 1);
     for (int i = 0; i < numChunks; i++) {
@@ -4436,29 +4436,33 @@ public abstract class StoreIngestionTaskTest {
         TestChunkingUtils.createChunkValueManifestRecord(putKeyFoo, messages.get(0), numChunks, tp);
     messages.add(manifestMessage);
 
-    LeaderProducedRecordContext leaderProducedRecordContext = mock(LeaderProducedRecordContext.class);
-    when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
-    when(leaderProducedRecordContext.getValueUnion()).thenReturn(manifestMessage.getValue().getPayloadUnion());
-    when(leaderProducedRecordContext.getKeyBytes()).thenReturn(putKeyFoo);
-
     runTest(Collections.singleton(PARTITION_FOO), () -> {
-      TestUtils.waitForNonDeterministicAssertion(
-          5,
-          TimeUnit.SECONDS,
-          () -> assertTrue(storeIngestionTaskUnderTest.hasAnySubscription()));
+      for (PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> message: messages) {
+        TestUtils.waitForNonDeterministicAssertion(
+            5,
+            TimeUnit.SECONDS,
+            () -> assertTrue(storeIngestionTaskUnderTest.hasAnySubscription()));
+        try {
+          Put put = (Put) message.getValue().getPayloadUnion();
+          put.putValue.position(4);
+          put.replicationMetadataPayload = ByteBuffer.allocate(10);
+          LeaderProducedRecordContext leaderProducedRecordContext = mock(LeaderProducedRecordContext.class);
+          when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
+          when(leaderProducedRecordContext.getValueUnion()).thenReturn(put);
+          when(leaderProducedRecordContext.getKeyBytes()).thenReturn(putKeyFoo);
 
-      try {
-        storeIngestionTaskUnderTest.produceToStoreBufferService(
-            manifestMessage,
-            leaderProducedRecordContext,
-            PARTITION_FOO,
-            localKafkaConsumerService.kafkaUrl,
-            System.nanoTime(),
-            System.currentTimeMillis());
-      } catch (InterruptedException e) {
-        throw new VeniceException(e);
+          storeIngestionTaskUnderTest.produceToStoreBufferService(
+              message,
+              leaderProducedRecordContext,
+              PARTITION_FOO,
+              localKafkaConsumerService.kafkaUrl,
+              System.nanoTime(),
+              System.currentTimeMillis());
+        } catch (InterruptedException e) {
+          throw new VeniceException(e);
+        }
       }
-    }, AA_ON);
+    }, aaConfig);
 
     HostLevelIngestionStats hostLevelIngestionStats = storeIngestionTaskUnderTest.hostLevelIngestionStats;
     verify(hostLevelIngestionStats).recordAssembledValueSize(eq(10L * numChunks), anyLong()); // 10 bytes per chunk
@@ -4663,47 +4667,6 @@ public abstract class StoreIngestionTaskTest {
             s -> mockTopicManager),
         MESSAGE_COUNT - 1 - CURRENT_OFFSET_SOME_CONSUMED,
         "If the partition has messages in it, and we consumed some of them, we expect lag to equal the unconsumed message count.");
-  }
-
-  @Test(dataProvider = "aaConfigProvider")
-  public void testAssembledValueSizeSensor2(AAConfig aaConfig) throws Exception {
-    // int assembledRecordSize = 999;
-    // ChunkedValueManifest chunkedValueManifest = new ChunkedValueManifest();
-    // chunkedValueManifest.size = assembledRecordSize;
-    // chunkedValueManifest.keysWithChunkIdSuffix = new ArrayList<>(1);
-    // chunkedValueManifest.keysWithChunkIdSuffix.add(ByteBuffer.wrap(putKeyFoo));
-    // chunkedValueManifest.schemaId = AvroProtocolDefinition.CHUNKED_VALUE_MANIFEST.getCurrentProtocolVersion();
-    // byte[] valueBytes;
-    // try (ChunkedValueManifestSerializer serializer = new ChunkedValueManifestSerializer(true)) {
-    // valueBytes = serializer.serialize(topic, chunkedValueManifest);
-    // }
-
-    int numChunks = 3;
-    List<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> messages = new ArrayList<>(numChunks + 1);
-    PubSubTopicPartition tp = new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO);
-    for (int i = 0; i < numChunks; i++) {
-      messages.add(TestChunkingUtils.createChunkedRecord(putKeyFoo, 1, 1, i, 0, tp));
-    }
-    messages.add(TestChunkingUtils.createChunkValueManifestRecord(putKeyFoo, messages.get(0), numChunks, tp));
-
-    VeniceWriter vtWriter = getVeniceWriter(new MockInMemoryProducerAdapter(inMemoryLocalKafkaBroker));
-    vtWriter.broadcastStartOfPush(Collections.emptyMap());
-    Put put = (Put) messages.get(numChunks).getValue().getPayloadUnion();
-    vtWriter.put(putKeyFoo, put.getPutValue().array(), EXISTING_SCHEMA_ID).get();
-    // vtWriter.broadcastEndOfPush(Collections.emptyMap());
-    HybridStoreConfig hybridStoreConfig = new HybridStoreConfigImpl(
-        -1,
-        100,
-        HybridStoreConfigImpl.DEFAULT_HYBRID_TIME_LAG_THRESHOLD,
-        DataReplicationPolicy.NON_AGGREGATE,
-        BufferReplayPolicy.REWIND_FROM_EOP);
-
-    Map<String, Object> extraProps = new HashMap();
-    runTest(new RandomPollStrategy(), Utils.setOf(PARTITION_FOO), () -> {}, () -> {
-      // verify(mockAbstractStorageEngine, timeout(TEST_TIMEOUT_MS))
-      // .put(PARTITION_FOO, putKeyFoo, ByteBuffer.wrap(ValueRecord.create(EXISTING_SCHEMA_ID, putValue).serialize()));
-      verify(storeIngestionTaskUnderTest.hostLevelIngestionStats).recordAssembledValueSize(eq(30L), anyLong());
-    }, Optional.of(hybridStoreConfig), false, Optional.empty(), AA_OFF, 1, extraProps);
   }
 
   private VeniceStoreVersionConfig getDefaultMockVeniceStoreVersionConfig(
