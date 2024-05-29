@@ -1,4 +1,4 @@
-package com.linkedin.venice.chunking;
+package com.linkedin.venice.utils;
 
 import static com.linkedin.venice.kafka.protocol.enums.MessageType.*;
 
@@ -18,7 +18,6 @@ import com.linkedin.venice.serialization.avro.ChunkedValueManifestSerializer;
 import com.linkedin.venice.storage.protocol.ChunkId;
 import com.linkedin.venice.storage.protocol.ChunkedKeySuffix;
 import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
-import com.linkedin.venice.utils.ByteUtils;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 

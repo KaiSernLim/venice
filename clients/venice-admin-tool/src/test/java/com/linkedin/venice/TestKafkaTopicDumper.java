@@ -3,7 +3,6 @@ package com.linkedin.venice;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.linkedin.venice.chunking.TestChunkingUtils;
 import com.linkedin.venice.compression.CompressionStrategy;
 import com.linkedin.venice.controllerapi.ControllerClient;
 import com.linkedin.venice.controllerapi.MultiSchemaResponse;
@@ -22,6 +21,7 @@ import com.linkedin.venice.schema.rmd.RmdSchemaGenerator;
 import com.linkedin.venice.schema.writecompute.WriteComputeSchemaConverter;
 import com.linkedin.venice.serializer.RecordSerializer;
 import com.linkedin.venice.serializer.SerializerDeserializerFactory;
+import com.linkedin.venice.utils.TestChunkingUtils;
 import com.linkedin.venice.utils.TestWriteUtils;
 import com.linkedin.venice.writer.update.UpdateBuilderImpl;
 import java.io.IOException;

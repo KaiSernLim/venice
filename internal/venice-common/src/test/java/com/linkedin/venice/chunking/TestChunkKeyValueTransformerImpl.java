@@ -3,6 +3,7 @@ package com.linkedin.venice.chunking;
 import com.linkedin.venice.serialization.KeyWithChunkingSuffixSerializer;
 import com.linkedin.venice.serialization.avro.ChunkedKeySuffixSerializer;
 import com.linkedin.venice.storage.protocol.ChunkedKeySuffix;
+import com.linkedin.venice.utils.TestChunkingUtils;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
