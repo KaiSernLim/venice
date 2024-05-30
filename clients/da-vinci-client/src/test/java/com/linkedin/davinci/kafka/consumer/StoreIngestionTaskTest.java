@@ -4426,7 +4426,7 @@ public abstract class StoreIngestionTaskTest {
 
   @Test(dataProvider = "aaConfigProvider")
   public void testAssembledValueSizeSensor(AAConfig aaConfig) throws Exception {
-    int numChunks = 1;
+    int numChunks = 3;
     PubSubTopicPartition tp = new PubSubTopicPartitionImpl(pubSubTopic, PARTITION_FOO);
     List<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> messages = new ArrayList<>(numChunks + 1);
     for (int i = 0; i < numChunks; i++) {
@@ -4437,15 +4437,14 @@ public abstract class StoreIngestionTaskTest {
     messages.add(manifestMessage);
 
     runTest(Collections.singleton(PARTITION_FOO), () -> {
+      TestUtils.waitForNonDeterministicAssertion(
+          5,
+          TimeUnit.SECONDS,
+          () -> assertTrue(storeIngestionTaskUnderTest.hasAnySubscription()));
+
       for (PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> message: messages) {
-        TestUtils.waitForNonDeterministicAssertion(
-            5,
-            TimeUnit.SECONDS,
-            () -> assertTrue(storeIngestionTaskUnderTest.hasAnySubscription()));
         try {
           Put put = (Put) message.getValue().getPayloadUnion();
-          put.putValue.position(4);
-          put.replicationMetadataPayload = ByteBuffer.allocate(10);
           LeaderProducedRecordContext leaderProducedRecordContext = mock(LeaderProducedRecordContext.class);
           when(leaderProducedRecordContext.getMessageType()).thenReturn(MessageType.PUT);
           when(leaderProducedRecordContext.getValueUnion()).thenReturn(put);
