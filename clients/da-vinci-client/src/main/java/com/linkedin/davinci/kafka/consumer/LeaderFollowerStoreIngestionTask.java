@@ -3603,6 +3603,11 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     }
   }
 
+  protected void reloadMaxRecordSizeBytes() {
+    int maxRecordSizeBytes = storeRepository.getStore(storeName).getMaxRecordSizeBytes();
+    getVeniceWriter().get().updateMaxRecordSizeBytes(maxRecordSizeBytes);
+  }
+
   /**
    * Once leader is marked completed, immediately reset {@link #lastSendIngestionHeartbeatTimestamp}
    * such that {@link #maybeSendIngestionHeartbeat()} will send HB SOS to the respective RT topics

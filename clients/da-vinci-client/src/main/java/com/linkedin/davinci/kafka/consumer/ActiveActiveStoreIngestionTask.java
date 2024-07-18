@@ -1481,10 +1481,6 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     };
   }
 
-  protected StorageUtilizationManager getStorageUtilizationManager() {
-    return storageUtilizationManager;
-  }
-
   protected LeaderProducerCallback createProducerCallback(
       PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
       PartitionConsumptionState partitionConsumptionState,

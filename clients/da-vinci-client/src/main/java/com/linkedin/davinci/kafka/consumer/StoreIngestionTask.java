@@ -475,7 +475,8 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
         serverConfig.isServerCalculateQuotaUsageBasedOnPartitionsAssignmentEnabled(),
         ingestionNotificationDispatcher,
         this::pauseConsumption,
-        this::resumeConsumption);
+        this::resumeConsumption,
+        this::reloadMaxRecordSizeBytes);
     this.storeRepository.registerStoreDataChangedListener(this.storageUtilizationManager);
     this.versionRole = PartitionReplicaIngestionContext.getStoreVersionRole(versionTopic, store);
     this.workloadType = PartitionReplicaIngestionContext.getWorkloadType(versionTopic, store);
@@ -4029,6 +4030,12 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   protected String getKafkaVersionTopic() {
     return kafkaVersionTopic;
   }
+
+  protected StorageUtilizationManager getStorageUtilizationManager() {
+    return storageUtilizationManager;
+  }
+
+  protected abstract void reloadMaxRecordSizeBytes();
 
   public boolean isStuckByMemoryConstraint() {
     for (PartitionExceptionInfo ex: partitionIngestionExceptionList) {

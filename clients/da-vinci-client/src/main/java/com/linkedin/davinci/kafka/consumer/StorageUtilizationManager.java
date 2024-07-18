@@ -50,7 +50,7 @@ import org.apache.logging.log4j.Logger;
  * 1. every partition in a store shares similar size;
  * 2. no write-compute messages/partial updates/incremental push
  */
-// TODO: rename
+// TODO: rename, Copilot recommended PartitionConsumptionManager, ConsumptionControlManger, ConsumptionStateManager
 public class StorageUtilizationManager implements StoreDataChangedListener {
   private static final Logger LOGGER = LogManager.getLogger(StorageUtilizationManager.class);
   private static final RedundantExceptionFilter REDUNDANT_LOGGING_FILTER = getRedundantExceptionFilter();
@@ -70,6 +70,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
   private final IngestionNotificationDispatcher ingestionNotificationDispatcher;
   private final TopicPartitionConsumerFunction pausePartition;
   private final TopicPartitionConsumerFunction resumePartition;
+  private final Runnable reloadMaxRecordSizeBytes;
 
   private boolean versionIsOnline;
 
@@ -104,7 +105,8 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
       boolean isServerCalculateQuotaUsageBasedOnPartitionsAssignmentEnabled,
       IngestionNotificationDispatcher ingestionNotificationDispatcher,
       TopicPartitionConsumerFunction pausePartition,
-      TopicPartitionConsumerFunction resumePartition) {
+      TopicPartitionConsumerFunction resumePartition,
+      Runnable reloadMaxRecordSizeBytes) {
     this.partitionConsumptionStateMap = partitionConsumptionStateMap;
     this.storageEngine = storageEngine;
     this.storagePartitionDiskUsageFunctionConstructor =
@@ -126,6 +128,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
     this.pausePartition = pausePartition;
     this.resumePartition = resumePartition;
     this.maxRecordSizeBytes = new AtomicInteger(store.getMaxRecordSizeBytes());
+    this.reloadMaxRecordSizeBytes = reloadMaxRecordSizeBytes;
     setStoreQuota(store);
     Version version = store.getVersion(storeVersion);
     versionIsOnline = isVersionOnline(version);
@@ -206,6 +209,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
       resumeAllPartitionsWherePossible(PausedConsumptionReason.QUOTA_EXCEEDED);
     }
 
+    // TODO: rename to nearline
     int oldMaxRecordSizeBytes = this.maxRecordSizeBytes.get();
     if (this.maxRecordSizeBytes.compareAndSet(oldMaxRecordSizeBytes, store.getMaxRecordSizeBytes())) {
       boolean isRecordLimitIncreased = oldMaxRecordSizeBytes < store.getMaxRecordSizeBytes();
@@ -217,6 +221,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
           (isRecordLimitIncreased)
               ? "Attempting to resume consumption on all partitions paused by RecordTooLarge issue."
               : "");
+      reloadMaxRecordSizeBytes.run();
       if (isRecordLimitIncreased) {
         resumeAllPartitionsWherePossible(PausedConsumptionReason.RECORD_TOO_LARGE);
       }

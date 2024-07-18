@@ -148,7 +148,7 @@ public class VeniceWriter<K, V, U> extends AbstractVeniceWriter<K, V, U> {
 
   /**
    * The default for {@link #maxRecordSizeBytes} is unlimited / unset (-1) just to be safe. A more specific default value
-   * should be set using {@link com.linkedin.venice.ConfigKeys#CONTROLLER_DEFAULT_MAX_RECORD_SIZE_BYTES} the controller
+   * should be set using {@link com.linkedin.venice.ConfigKeys#DEFAULT_MAX_RECORD_SIZE_BYTES} the controller
    * config on the cluster level.
    */
   public static final int UNLIMITED_MAX_RECORD_SIZE = -1;
@@ -275,7 +275,7 @@ public class VeniceWriter<K, V, U> extends AbstractVeniceWriter<K, V, U> {
   private volatile boolean isChunkingFlagInvoked;
 
   private final boolean isRmdChunkingEnabled;
-  private final int maxRecordSizeBytes;
+  private int maxRecordSizeBytes;
 
   private final ControlMessage heartBeatMessage;
 
@@ -1602,7 +1602,7 @@ public class VeniceWriter<K, V, U> extends AbstractVeniceWriter<K, V, U> {
     return "Key size: " + serializedKeySize + " bytes, " + "Value size: " + serializedValueSize + " bytes, "
         + "Replication Metadata size: " + replicationMetadataPayloadSize + " bytes, " + "Total payload size: "
         + (serializedKeySize + serializedValueSize + replicationMetadataPayloadSize) + " bytes, "
-        + "Max available payload size: " + maxSizeForUserPayloadPerMessageInBytes + " bytes, " + ", Max record size: "
+        + "Max available payload size: " + maxSizeForUserPayloadPerMessageInBytes + " bytes, " + "Max record size: "
         + ((maxRecordSizeBytes == UNLIMITED_MAX_RECORD_SIZE) ? "unlimited" : maxRecordSizeBytes) + " bytes.";
   }
 
@@ -2084,6 +2084,10 @@ public class VeniceWriter<K, V, U> extends AbstractVeniceWriter<K, V, U> {
 
   public int getMaxRecordSizeBytes() {
     return maxRecordSizeBytes;
+  }
+
+  public synchronized void updateMaxRecordSizeBytes(int maxRecordSizeBytes) {
+    this.maxRecordSizeBytes = maxRecordSizeBytes;
   }
 
   public boolean isRecordTooLarge(int recordSize) {
