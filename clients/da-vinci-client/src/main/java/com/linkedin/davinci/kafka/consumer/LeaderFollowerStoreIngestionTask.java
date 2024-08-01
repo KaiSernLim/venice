@@ -267,6 +267,10 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
         nativeReplicationSourceVersionTopicKafkaURL,
         getVersionTopic());
 
+    int maxRecordSizeBytesFromStore = store.getMaxNearlineRecordSizeBytes();
+    int maxRecordSizeBytes =
+        (maxRecordSizeBytesFromStore < 0) ? serverConfig.getDefaultMaxRecordSizeBytes() : maxRecordSizeBytesFromStore;
+
     this.veniceWriterFactory = builder.getVeniceWriterFactory();
     /**
      * In general, a partition in version topic follows this pattern:
@@ -282,6 +286,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             .setChunkingEnabled(isChunked)
             .setRmdChunkingEnabled(version.isRmdChunkingEnabled())
             .setPartitionCount(storeVersionPartitionCount)
+            .setMaxRecordSizeBytes(maxRecordSizeBytes)
             .build();
     this.veniceWriter = Lazy.of(() -> veniceWriterFactory.createVeniceWriter(writerOptions));
     this.kafkaClusterIdToUrlMap = serverConfig.getKafkaClusterIdToUrlMap();
