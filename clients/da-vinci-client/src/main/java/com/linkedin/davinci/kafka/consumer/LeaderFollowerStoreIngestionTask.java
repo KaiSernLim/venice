@@ -267,9 +267,15 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
         nativeReplicationSourceVersionTopicKafkaURL,
         getVersionTopic());
 
-    int maxRecordSizeBytesFromStore = store.getMaxNearlineRecordSizeBytes();
-    int maxRecordSizeBytes =
-        (maxRecordSizeBytesFromStore < 0) ? serverConfig.getDefaultMaxRecordSizeBytes() : maxRecordSizeBytesFromStore;
+    int maxRecordSizeBytes = store.getMaxNearlineRecordSizeBytes();
+    if (maxRecordSizeBytes < 0) {
+      LOGGER.warn(
+          "Max record size: {} was set to invalid value for store: {}. Using default max record size: {}",
+          maxRecordSizeBytes,
+          store.getName(),
+          serverConfig.getDefaultMaxRecordSizeBytes());
+      maxRecordSizeBytes = serverConfig.getDefaultMaxRecordSizeBytes();
+    }
 
     this.veniceWriterFactory = builder.getVeniceWriterFactory();
     /**
