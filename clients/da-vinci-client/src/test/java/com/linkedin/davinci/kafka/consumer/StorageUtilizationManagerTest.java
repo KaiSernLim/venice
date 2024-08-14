@@ -1,5 +1,7 @@
 package com.linkedin.davinci.kafka.consumer;
 
+import static com.linkedin.davinci.kafka.consumer.StorageUtilizationManager.PausedConsumptionReason;
+import static com.linkedin.venice.utils.ByteUtils.BYTES_PER_MB;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.mock;
@@ -14,11 +16,15 @@ import com.linkedin.venice.meta.VersionStatus;
 import com.linkedin.venice.offsets.OffsetRecord;
 import com.linkedin.venice.utils.Utils;
 import com.linkedin.venice.utils.concurrent.VeniceConcurrentHashMap;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import org.mockito.ArgumentMatcher;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 
@@ -26,6 +32,8 @@ import org.testng.annotations.Test;
 public class StorageUtilizationManagerTest {
   private final static long storeQuotaInBytes = 100L;
   private final static long newStoreQuotaInBytes = 200L;
+  private final static int maxRecordSizeBytes = 2 * BYTES_PER_MB;
+  private final static int newMaxRecordSizeBytes = 4 * BYTES_PER_MB;
   private final static int storePartitionCount = 10;
   private final static String storeName = "TestTopic";
   private final static String topic = Version.composeKafkaTopic(storeName, 1);
@@ -36,6 +44,8 @@ public class StorageUtilizationManagerTest {
   private IngestionNotificationDispatcher ingestionNotificationDispatcher;
   private Store store;
   private Version version;
+  private Set<Integer> pausedPartitions;
+  private Set<Integer> resumedPartitions;
   private StorageUtilizationManager quotaEnforcer;
 
   @BeforeClass
@@ -48,6 +58,8 @@ public class StorageUtilizationManagerTest {
   @BeforeMethod
   public void buildNewQuotaEnforcer() {
     ingestionNotificationDispatcher = mock(IngestionNotificationDispatcher.class);
+    pausedPartitions = new HashSet<>();
+    resumedPartitions = new HashSet<>();
     partitionConsumptionStateMap = new VeniceConcurrentHashMap<>();
 
     for (int i = 1; i <= storePartitionCount; i++) {
@@ -58,6 +70,7 @@ public class StorageUtilizationManagerTest {
 
     when(store.getName()).thenReturn(storeName);
     when(store.getStorageQuotaInByte()).thenReturn(storeQuotaInBytes);
+    when(store.getMaxRecordSizeBytes()).thenReturn(maxRecordSizeBytes);
     when(store.getPartitionCount()).thenReturn(storePartitionCount);
     when(store.getVersion(storeVersion)).thenReturn(version);
     when(store.isHybridStoreDiskQuotaEnabled()).thenReturn(true);
@@ -72,8 +85,12 @@ public class StorageUtilizationManagerTest {
         true,
         true,
         ingestionNotificationDispatcher,
-        (t, p) -> {},
-        (t, p) -> {});
+        (t, p) -> {
+          pausedPartitions.add(p);
+        },
+        (t, p) -> {
+          resumedPartitions.add(p);
+        });
   }
 
   @Test
@@ -202,5 +219,96 @@ public class StorageUtilizationManagerTest {
   private void setUpOnlineVersion() {
     when(version.getStatus()).thenReturn(VersionStatus.ONLINE);
     quotaEnforcer.handleStoreChanged(store);
+  }
+
+  /**
+   * Pause a partition for record too large and resume it after the size limit is increased.
+   */
+  @Test
+  public void testPausePartitionForRecordTooLarge() throws Exception {
+    int pausedPartition = 1;
+    Assert.assertFalse(quotaEnforcer.isPartitionPausedForRecordTooLarge(pausedPartition));
+    quotaEnforcer.pausePartitionForRecordTooLarge(pausedPartition, topic);
+    for (int partition = 1; partition <= storePartitionCount; partition++) {
+      boolean isPaused = quotaEnforcer.isPartitionPausedForRecordTooLarge(partition);
+      if (partition == pausedPartition) {
+        Assert.assertTrue(isPaused, "The one selected partition should be paused for record too large");
+      } else {
+        Assert.assertFalse(isPaused, "Every other partition should not remain paused");
+      }
+    }
+
+    // After increasing the size limit, handleStoreChanged() should resume consumption for the partition
+    when(store.getMaxRecordSizeBytes()).thenReturn(newMaxRecordSizeBytes);
+    quotaEnforcer.handleStoreChanged(store);
+    for (int partition = 1; partition <= storePartitionCount; partition++) {
+      Assert.assertFalse(quotaEnforcer.isPartitionPausedForRecordTooLarge(partition), "No partition should be paused");
+    }
+  }
+
+  @DataProvider(name = "PausedConsumptionReasons")
+  public static Object[][] pausedConsumptionReasonProvider() {
+    return new Object[][] { { PausedConsumptionReason.QUOTA_EXCEEDED, PausedConsumptionReason.RECORD_TOO_LARGE },
+        { PausedConsumptionReason.RECORD_TOO_LARGE, PausedConsumptionReason.QUOTA_EXCEEDED } };
+  }
+
+  /**
+   * Partitions can only resume consumption when they are not paused for any reason.
+   * This test method verifies this by pausing a subset of partitions for one reason and then attempting to resume them
+   * for another reason. The subset of partitions that were paused for the first reason should not be resumed.
+   */
+  // TODO: possibly better naming?
+  @Test(dataProvider = "PausedConsumptionReasons")
+  public void testPartialResumePartitions(
+      PausedConsumptionReason partialPauseReason,
+      PausedConsumptionReason fullPauseReason) throws Exception {
+
+    setUpOnlineVersion();
+
+    // Pause only a subset of all partitions for the first reason
+    HashSet<Integer> pausedPartitionsSubset = new HashSet<>(Arrays.asList(1, 3, 5, 7, 9));
+    for (int partition = 1; partition <= storePartitionCount; partition++) {
+      if (pausedPartitionsSubset.contains(partition)) {
+        quotaEnforcer.pausePartition(partition, topic, partialPauseReason);
+        Assert.assertTrue(quotaEnforcer.isPartitionPausedForReason(partition, partialPauseReason));
+      } else {
+        Assert.assertFalse(quotaEnforcer.isPartitionPausedForReason(partition, partialPauseReason));
+      }
+    }
+
+    // Pause all partitions for the second reason
+    for (int partition = 1; partition <= storePartitionCount; partition++) {
+      quotaEnforcer.pausePartition(partition, topic, fullPauseReason);
+      Assert.assertTrue(quotaEnforcer.isPartitionPausedForReason(partition, fullPauseReason));
+    }
+
+    Assert.assertTrue(resumedPartitions.isEmpty(), "No partitions should have been resumed yet.");
+
+    // Resume consumption for all partitions for the second reason, which should call resumeAllPartitionsIfPossible()
+    switch (fullPauseReason) {
+      case QUOTA_EXCEEDED:
+        when(store.isHybridStoreDiskQuotaEnabled()).thenReturn(false);
+        break;
+      case RECORD_TOO_LARGE:
+        when(store.getMaxRecordSizeBytes()).thenReturn(newMaxRecordSizeBytes);
+        break;
+      default:
+        Assert.fail("Invalid PausedConsumptionReason provided.");
+    }
+    quotaEnforcer.handleStoreChanged(store);
+
+    // No partitions should remain paused for the second reason, but all partitions remain paused for the first reason
+    for (int partition = 1; partition <= storePartitionCount; partition++) {
+      Assert.assertFalse(quotaEnforcer.isPartitionPausedForReason(partition, fullPauseReason));
+      boolean isResumed = resumedPartitions.contains(partition);
+      boolean isPaused = quotaEnforcer.isPartitionPausedForReason(partition, partialPauseReason);
+      if (pausedPartitionsSubset.contains(partition)) {
+        Assert.assertFalse(isResumed, "Partition should not have been resumed by handleStoreChanged()");
+        Assert.assertTrue(isPaused, "Partition should remain paused for the first reason");
+      } else {
+        Assert.assertTrue(isResumed, "Partition should have been resumed by handleStoreChanged()");
+        Assert.assertFalse(isPaused, "Partition should no longer be paused after bumping the setting");
+      }
+    }
   }
 }

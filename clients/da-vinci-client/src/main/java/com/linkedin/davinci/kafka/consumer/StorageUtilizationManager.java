@@ -16,7 +16,6 @@ import com.linkedin.venice.utils.locks.AutoCloseableLock;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -56,7 +55,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
   private static final Logger LOGGER = LogManager.getLogger(StorageUtilizationManager.class);
   private static final RedundantExceptionFilter REDUNDANT_LOGGING_FILTER = getRedundantExceptionFilter();
 
-  private final ConcurrentMap<Integer, PartitionConsumptionState> partitionConsumptionStateMap;
+  private final Map<Integer, PartitionConsumptionState> partitionConsumptionStateMap; // UnmodifiableMap
   private final AbstractStorageEngine storageEngine;
   private final Function<Integer, StoragePartitionDiskUsage> storagePartitionDiskUsageFunctionConstructor;
   private final String versionTopic;
@@ -94,12 +93,13 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
    *              stale when the store config changes. Refreshing the things we need out of the store object
    *              is handled in {@link #handleStoreChanged(Store)}.
    */
+  // TODO: rename class after PR is reviewed because it's no longer just about hybrid quota
   public StorageUtilizationManager(
       AbstractStorageEngine storageEngine,
       Store store,
       String versionTopic,
       int partitionCount,
-      ConcurrentMap<Integer, PartitionConsumptionState> partitionConsumptionStateMap,
+      Map<Integer, PartitionConsumptionState> partitionConsumptionStateMap,
       boolean isHybridQuotaEnabledInServer,
       boolean isServerCalculateQuotaUsageBasedOnPartitionsAssignmentEnabled,
       IngestionNotificationDispatcher ingestionNotificationDispatcher,
@@ -131,6 +131,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
     versionIsOnline = isVersionOnline(version);
   }
 
+  // TODO: possibly better naming?
   protected enum PausedConsumptionReason {
     QUOTA_EXCEEDED, RECORD_TOO_LARGE
   }
@@ -202,7 +203,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
           this.storeQuotaInBytes,
           store.getStorageQuotaInByte(),
           store.isHybridStoreDiskQuotaEnabled() ? "enabled" : "not enabled");
-      resumeAllPartitions(PausedConsumptionReason.QUOTA_EXCEEDED);
+      resumeAllPartitionsIfPossible(PausedConsumptionReason.QUOTA_EXCEEDED);
     }
 
     int oldMaxRecordSizeBytes = this.maxRecordSizeBytes.get();
@@ -215,7 +216,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
           store.getMaxRecordSizeBytes(),
           (isRecordLimitIncreased) ? "Resuming consumption on all partitions paused by RecordTooLarge issue." : "");
       if (isRecordLimitIncreased) {
-        resumeAllPartitions(PausedConsumptionReason.RECORD_TOO_LARGE);
+        resumeAllPartitionsIfPossible(PausedConsumptionReason.RECORD_TOO_LARGE);
       }
     }
 
@@ -350,7 +351,7 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
    * After the partition gets paused, consumer.poll() in {@link StoreIngestionTask} won't return any records from this
    * partition without affecting partition subscription
    */
-  private void pausePartition(int partition, String consumingTopic, PausedConsumptionReason reason) {
+  protected void pausePartition(int partition, String consumingTopic, PausedConsumptionReason reason) {
     getPausedPartitionsForReason(reason).add(partition);
     pausePartition.execute(consumingTopic, partition);
   }
@@ -371,10 +372,10 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
 
   /**
    * Resumes consumption on all partitions. Intentionally loops over {@link partitionConsumptionStateMap} to avoid
-   * missing any partitions that were untracked in {@link pausedPartitionsForQuotaExceeded} or
-   * {@link pausedPartitionsForRecordTooLarge}
+   * any partitions missing from {@link pausedPartitionsForQuotaExceeded} or {@link pausedPartitionsForRecordTooLarge}.
+   * In the unlikely case that partition is paused for both reasons, we can't resume it until both reasons are resolved.
    */
-  private void resumeAllPartitions(PausedConsumptionReason reason) {
+  private void resumeAllPartitionsIfPossible(PausedConsumptionReason reason) {
     partitionConsumptionStateMap.forEach((partition, pcs) -> {
       String consumingTopic = getConsumingTopic(pcs);
       resumePartitionIfPossible(partition, consumingTopic, reason);
@@ -401,6 +402,14 @@ public class StorageUtilizationManager implements StoreDataChangedListener {
       }
     }
     return consumingTopic;
+  }
+
+  protected boolean isPartitionPausedForReason(int partition, PausedConsumptionReason reason) {
+    return getPausedPartitionsForReason(reason).contains(partition);
+  }
+
+  protected boolean isPartitionPausedForRecordTooLarge(int partition) {
+    return pausedPartitionsForRecordTooLarge.contains(partition);
   }
 
   protected boolean isPartitionPausedForQuotaExceeded(int partition) {
