@@ -3168,6 +3168,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       LeaderProducedRecordContext leaderProducedRecordContext =
           LeaderProducedRecordContext.newPutRecord(kafkaClusterId, consumerRecord.getOffset(), keyBytes, updatedPut);
 
+      // TODO: does the catch RecordTooLargeException need to be in LFSIT too?
       BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> produceFunction =
           (callback, leaderMetadataWrapper) -> veniceWriter.get()
               .put(
