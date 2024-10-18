@@ -347,7 +347,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   }
 
   @Override
-  protected IngestionBatchProcessor getIngestionBatchProcessor() {
+  public IngestionBatchProcessor getIngestionBatchProcessor() {
     return ingestionBatchProcessingLazy.get();
   }
 
