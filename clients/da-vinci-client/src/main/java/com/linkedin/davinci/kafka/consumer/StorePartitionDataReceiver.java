@@ -1404,7 +1404,7 @@ public class StorePartitionDataReceiver
       String kafkaUrl,
       int kafkaClusterId,
       long beforeProcessingRecordTimestampNs) {
-    LeaderProducerCallback callback = storeIngestionTask.createProducerCallback(
+    LeaderProducerCallback callback = createProducerCallback(
         consumerRecord,
         partitionConsumptionState,
         leaderProducedRecordContext,
@@ -1463,7 +1463,7 @@ public class StorePartitionDataReceiver
       String kafkaUrl,
       int kafkaClusterId,
       long beforeProcessingRecordTimestampNs) {
-    LeaderProducerCallback callback = storeIngestionTask.createProducerCallback(
+    LeaderProducerCallback callback = createProducerCallback(
         consumerRecord,
         partitionConsumptionState,
         leaderProducedRecordContext,
@@ -1503,6 +1503,32 @@ public class StorePartitionDataReceiver
         true,
         leaderCompleteState,
         originTimeStampMs);
+  }
+
+  private LeaderProducerCallback createProducerCallback(
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      PartitionConsumptionState partitionConsumptionState,
+      LeaderProducedRecordContext leaderProducedRecordContext,
+      int partition,
+      String kafkaUrl,
+      long beforeProcessingRecordTimestampNs) {
+    return storeIngestionTask.isActiveActiveReplicationEnabled()
+        ? new ActiveActiveProducerCallback(
+            (ActiveActiveStoreIngestionTask) storeIngestionTask,
+            consumerRecord,
+            partitionConsumptionState,
+            leaderProducedRecordContext,
+            partition,
+            kafkaUrl,
+            beforeProcessingRecordTimestampNs)
+        : new LeaderProducerCallback(
+            (LeaderFollowerStoreIngestionTask) storeIngestionTask,
+            consumerRecord,
+            partitionConsumptionState,
+            leaderProducedRecordContext,
+            partition,
+            kafkaUrl,
+            beforeProcessingRecordTimestampNs);
   }
 
   @Override
