@@ -4643,14 +4643,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       LeaderCompleteState leaderCompleteState,
       long originTimeStampMs);
 
-  protected abstract LeaderProducerCallback createProducerCallback(
-      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
-      PartitionConsumptionState partitionConsumptionState,
-      LeaderProducedRecordContext leaderProducedRecordContext,
-      int partition,
-      String kafkaUrl,
-      long beforeProcessingRecordTimestampNs);
-
   protected abstract PubSubMessageProcessedResult processMessage(
       PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
       PartitionConsumptionState partitionConsumptionState,
