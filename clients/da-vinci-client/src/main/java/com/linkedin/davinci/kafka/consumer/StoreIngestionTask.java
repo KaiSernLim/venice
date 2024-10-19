@@ -29,7 +29,6 @@ import com.linkedin.davinci.listener.response.AdminResponse;
 import com.linkedin.davinci.notifier.VeniceNotifier;
 import com.linkedin.davinci.replication.RmdWithValueSchemaId;
 import com.linkedin.davinci.replication.merge.MergeConflictResolver;
-import com.linkedin.davinci.replication.merge.MergeConflictResult;
 import com.linkedin.davinci.replication.merge.RmdSerDe;
 import com.linkedin.davinci.stats.AggVersionedDIVStats;
 import com.linkedin.davinci.stats.AggVersionedIngestionStats;
@@ -4413,13 +4412,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       PubSubTopicPartition topicPartition,
       ChunkedValueManifestContainer manifestContainer);
 
-  void validatePostOperationResultsAndRecord(
-      MergeConflictResult mergeConflictResult,
-      Long offsetSumPreOperation,
-      List<Long> timestampsPreOperation) {
-    throw new VeniceException("validatePostOperationResultsAndRecord() should only be called in active active mode");
-  }
-
   public AggVersionedIngestionStats getAggVersionedIngestionStats() {
     throw new VeniceException("getAggVersionedIngestionStats() should only be called in active active mode");
   }
@@ -4443,10 +4435,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       int partition,
       long currentTimeForMetricsMs) {
     throw new VeniceException("getReplicationMetadataAndSchemaId() should only be called in active active mode");
-  }
-
-  public long getWriteTimestampFromKME(KafkaMessageEnvelope kme) {
-    throw new VeniceException("getWriteTimestampFromKME() should only be called in active active mode");
   }
 
   public MergeConflictResolver getMergeConflictResolver() {
