@@ -3768,4 +3768,14 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   public StoreWriteComputeProcessor getStoreWriteComputeHandler() {
     return storeWriteComputeHandler;
   }
+
+  @Override
+  public Int2ObjectMap<String> getKafkaClusterIdToUrlMap() {
+    return kafkaClusterIdToUrlMap;
+  }
+
+  @Override
+  public boolean hasChangeCaptureView() {
+    return hasChangeCaptureView;
+  }
 }
