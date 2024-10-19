@@ -4099,6 +4099,10 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     return versionTopic;
   }
 
+  public PubSubTopic getRealTimeTopic() {
+    return realTimeTopic;
+  }
+
   public boolean isMetricsEmissionEnabled() {
     return emitMetrics.get();
   }
@@ -4646,11 +4650,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       boolean addLeaderCompleteState,
       LeaderCompleteState leaderCompleteState,
       long originTimeStampMs);
-
-  protected abstract ByteBuffer maybeCompressData(
-      int partition,
-      ByteBuffer data,
-      PartitionConsumptionState partitionConsumptionState);
 
   protected abstract GenericRecord readStoredValueRecord(
       PartitionConsumptionState partitionConsumptionState,
