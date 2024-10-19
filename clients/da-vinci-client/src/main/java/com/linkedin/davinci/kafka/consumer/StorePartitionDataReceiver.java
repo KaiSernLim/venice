@@ -203,7 +203,7 @@ public class StorePartitionDataReceiver
      */
     records = validateAndFilterOutDuplicateMessagesFromLeaderTopic(records, kafkaUrl, topicPartition);
 
-    if (storeIngestionTask.shouldProduceInBatch(records)) {
+    if (shouldProduceInBatch(records)) {
       produceToStoreBufferServiceOrKafkaInBatch(
           records,
           topicPartition,
@@ -335,6 +335,12 @@ public class StorePartitionDataReceiver
         topicPartition.getPartitionNumber(),
         elapsedTimeForPuttingIntoQueue,
         beforeProcessingBatchRecordsTimestampMs);
+  }
+
+  private boolean shouldProduceInBatch(Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> records) {
+    return (storeIngestionTask.isActiveActiveReplicationEnabled() || storeIngestionTask.isTransientRecordBufferUsed())
+        && storeIngestionTask.getServerConfig().isAAWCWorkloadParallelProcessingEnabled()
+        && IngestionBatchProcessor.isAllMessagesFromRTTopic(records);
   }
 
   private void updateMetricsAndEnforceQuota(
