@@ -3,8 +3,12 @@ package com.linkedin.davinci.kafka.consumer;
 import com.linkedin.avroutil1.compatibility.shaded.org.apache.commons.lang3.Validate;
 import com.linkedin.davinci.ingestion.consumption.ConsumedDataReceiver;
 import com.linkedin.davinci.stats.HostLevelIngestionStats;
+import com.linkedin.davinci.validation.PartitionTracker;
+import com.linkedin.davinci.validation.PartitionTracker.TopicType;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.exceptions.VeniceMessageException;
+import com.linkedin.venice.exceptions.validation.DuplicateDataException;
+import com.linkedin.venice.exceptions.validation.FatalDataValidationException;
 import com.linkedin.venice.kafka.protocol.ControlMessage;
 import com.linkedin.venice.kafka.protocol.KafkaMessageEnvelope;
 import com.linkedin.venice.kafka.protocol.Put;
@@ -27,6 +31,7 @@ import com.linkedin.venice.utils.ValueHolder;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
@@ -125,8 +130,7 @@ public class StorePartitionDataReceiver
      * Validate and filter out duplicate messages from the real-time topic as early as possible, so that
      * the following batch processing logic won't spend useless efforts on duplicate messages.
      */
-    records =
-        storeIngestionTask.validateAndFilterOutDuplicateMessagesFromLeaderTopic(records, kafkaUrl, topicPartition);
+    records = validateAndFilterOutDuplicateMessagesFromLeaderTopic(records, kafkaUrl, topicPartition);
 
     if (storeIngestionTask.shouldProduceInBatch(records)) {
       produceToStoreBufferServiceOrKafkaInBatch(
@@ -286,6 +290,74 @@ public class StorePartitionDataReceiver
 
       hostLevelIngestionStats.recordStorageQuotaUsed(storageUtilizationManager.getDiskQuotaUsage());
     }
+  }
+
+  public Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> validateAndFilterOutDuplicateMessagesFromLeaderTopic(
+      Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> records,
+      String kafkaUrl,
+      PubSubTopicPartition topicPartition) {
+    PartitionConsumptionState partitionConsumptionState =
+        storeIngestionTask.getPartitionConsumptionState(topicPartition.getPartitionNumber());
+    if (partitionConsumptionState == null) {
+      // The partition is likely unsubscribed, will skip these messages.
+      LOGGER.warn(
+          "No partition consumption state for store version: {}, partition:{}, will filter out all the messages",
+          storeIngestionTask.getKafkaVersionTopic(),
+          topicPartition.getPartitionNumber());
+      return Collections.emptyList();
+    }
+    boolean isEndOfPushReceived = partitionConsumptionState.isEndOfPushReceived();
+    if (!storeIngestionTask.shouldProduceToVersionTopic(partitionConsumptionState)) {
+      return records;
+    }
+    /**
+     * Just to note this code is getting executed in Leader only. Leader DIV check progress is always ahead of the
+     * actual data persisted on disk. Leader DIV check results will not be persisted on disk.
+     */
+    Iterator<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> iter = records.iterator();
+    while (iter.hasNext()) {
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> record = iter.next();
+      boolean isRealTimeMsg = record.getTopicPartition().getPubSubTopic().isRealTime();
+      try {
+        /**
+         * TODO: An improvement can be made to fail all future versions for fatal DIV exceptions after EOP.
+         */
+        TopicType topicType;
+        if (storeIngestionTask.isGlobalRtDivEnabled()) {
+          final int topicTypeEnumCode = isRealTimeMsg ? TopicType.REALTIME_TOPIC_TYPE : TopicType.VERSION_TOPIC_TYPE;
+          topicType = TopicType.of(topicTypeEnumCode, kafkaUrl);
+        } else {
+          topicType = PartitionTracker.VERSION_TOPIC;
+        }
+
+        storeIngestionTask.validateMessage(
+            topicType,
+            storeIngestionTask.getKafkaDataIntegrityValidatorForLeaders(),
+            record,
+            isEndOfPushReceived,
+            partitionConsumptionState);
+        storeIngestionTask.getVersionedDIVStats()
+            .recordSuccessMsg(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
+      } catch (FatalDataValidationException e) {
+        if (!isEndOfPushReceived) {
+          throw e;
+        }
+      } catch (DuplicateDataException e) {
+        /**
+         * Skip duplicated messages; leader must not produce duplicated messages from RT to VT, because leader will
+         * override the DIV info for messages from RT; as a result, both leaders and followers will persisted duplicated
+         * messages to disk, and potentially rewind a k/v pair to an old value.
+         */
+        storeIngestionTask.getDivErrorMetricCallback().accept(e);
+        LOGGER.info(
+            "Skipping a duplicate record from: {} offset: {} for replica: {}",
+            record.getTopicPartition(),
+            record.getOffset(),
+            partitionConsumptionState.getReplicaId());
+        iter.remove();
+      }
+    }
+    return records;
   }
 
   /**
