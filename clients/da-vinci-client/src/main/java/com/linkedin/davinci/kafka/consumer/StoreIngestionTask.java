@@ -35,7 +35,6 @@ import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.stats.HostLevelIngestionStats;
 import com.linkedin.davinci.storage.StorageEngineRepository;
 import com.linkedin.davinci.storage.StorageMetadataService;
-import com.linkedin.davinci.storage.chunking.ChunkedValueManifestContainer;
 import com.linkedin.davinci.store.AbstractStorageEngine;
 import com.linkedin.davinci.store.StoragePartitionConfig;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
@@ -96,6 +95,7 @@ import com.linkedin.venice.pubsub.api.exceptions.PubSubUnsubscribedTopicPartitio
 import com.linkedin.venice.pubsub.manager.TopicManager;
 import com.linkedin.venice.pubsub.manager.TopicManagerRepository;
 import com.linkedin.venice.schema.SchemaEntry;
+import com.linkedin.venice.serialization.AvroStoreDeserializerCache;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
 import com.linkedin.venice.serialization.avro.ChunkedValueManifestSerializer;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
@@ -157,7 +157,6 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -4403,13 +4402,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       LeaderCompleteState leaderCompleteState,
       long originTimeStampMs);
 
-  protected abstract GenericRecord readStoredValueRecord(
-      PartitionConsumptionState partitionConsumptionState,
-      byte[] keyBytes,
-      int readerValueSchemaID,
-      PubSubTopicPartition topicPartition,
-      ChunkedValueManifestContainer manifestContainer);
-
   public AggVersionedIngestionStats getAggVersionedIngestionStats() {
     throw new VeniceException("getAggVersionedIngestionStats() should only be called in active active mode");
   }
@@ -4439,6 +4431,8 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   public abstract boolean hasChangeCaptureView();
 
   public abstract StoreWriteComputeProcessor getStoreWriteComputeHandler();
+
+  public abstract AvroStoreDeserializerCache getStoreDeserializerCache();
 
   protected abstract Lazy<VeniceWriter<byte[], byte[], byte[]>> getVeniceWriter();
 
