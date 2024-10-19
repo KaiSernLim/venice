@@ -180,7 +180,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
 
   private final AtomicLong lastSendIngestionHeartbeatTimestamp = new AtomicLong(0);
 
-  private final Lazy<IngestionBatchProcessor> ingestionBatchProcessingLazy;
+  // private final Lazy<IngestionBatchProcessor> ingestionBatchProcessingLazy;
 
   public LeaderFollowerStoreIngestionTask(
       StoreIngestionTaskFactory.Builder builder,
@@ -302,22 +302,22 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
         builder.getSchemaRepo(),
         getStoreName(),
         serverConfig.isComputeFastAvroEnabled());
-    this.ingestionBatchProcessingLazy = Lazy.of(() -> {
-      if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
-        LOGGER.info("AA/WC workload parallel processing enabled is false");
-        return null;
-      }
-      LOGGER.info("AA/WC workload parallel processing enabled is true");
-      return new IngestionBatchProcessor(
-          kafkaVersionTopic,
-          parallelProcessingThreadPool,
-          null,
-          this::processMessage,
-          isWriteComputationEnabled,
-          isActiveActiveReplicationEnabled(),
-          builder.getVersionedStorageIngestionStats(),
-          getHostLevelIngestionStats());
-    });
+    // this.ingestionBatchProcessingLazy = Lazy.of(() -> {
+    // if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
+    // LOGGER.info("AA/WC workload parallel processing enabled is false");
+    // return null;
+    // }
+    // LOGGER.info("AA/WC workload parallel processing enabled is true");
+    // return new IngestionBatchProcessor(
+    // kafkaVersionTopic,
+    // parallelProcessingThreadPool,
+    // null,
+    // this::processMessage,
+    // isWriteComputationEnabled,
+    // isActiveActiveReplicationEnabled(),
+    // builder.getVersionedStorageIngestionStats(),
+    // getHostLevelIngestionStats());
+    // });
   }
 
   @Override
@@ -339,10 +339,10 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     }
   }
 
-  @Override
-  public IngestionBatchProcessor getIngestionBatchProcessor() {
-    return ingestionBatchProcessingLazy.get();
-  }
+  // @Override
+  // public IngestionBatchProcessor getIngestionBatchProcessor() {
+  // return ingestionBatchProcessingLazy.get();
+  // }
 
   /**
    * Close a DIV segment for a version topic partition.

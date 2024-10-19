@@ -36,6 +36,7 @@ import com.linkedin.venice.utils.LatencyUtils;
 import com.linkedin.venice.utils.SparseConcurrentList;
 import com.linkedin.venice.utils.Utils;
 import com.linkedin.venice.utils.ValueHolder;
+import com.linkedin.venice.utils.lazy.Lazy;
 import com.linkedin.venice.writer.ChunkAwareCallback;
 import com.linkedin.venice.writer.DeleteMetadata;
 import com.linkedin.venice.writer.LeaderCompleteState;
@@ -66,6 +67,7 @@ public class StorePartitionDataReceiver
   private final String kafkaUrl;
   private final String kafkaUrlForLogger;
   private final int kafkaClusterId;
+  private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
   private final Logger LOGGER;
 
   private long receivedRecordsCount;
@@ -82,6 +84,26 @@ public class StorePartitionDataReceiver
     this.kafkaClusterId = kafkaClusterId;
     this.LOGGER = LogManager.getLogger(this.getClass().getSimpleName() + " [" + kafkaUrlForLogger + "]");
     this.receivedRecordsCount = 0L;
+    this.ingestionBatchProcessorLazy = Lazy.of(() -> {
+      if (!storeIngestionTask.getServerConfig().isAAWCWorkloadParallelProcessingEnabled()) {
+        LOGGER.info("AA/WC workload parallel processing enabled is false");
+        return null;
+      }
+      IngestionBatchProcessor.ProcessingFunction processingFunction =
+          (storeIngestionTask.isActiveActiveReplicationEnabled())
+              ? storeIngestionTask::processActiveActiveMessage
+              : storeIngestionTask::processMessage;
+      LOGGER.info("AA/WC workload parallel processing enabled is true");
+      return new IngestionBatchProcessor(
+          storeIngestionTask.getKafkaVersionTopic(),
+          storeIngestionTask.getParallelProcessingThreadPool(),
+          null,
+          processingFunction,
+          storeIngestionTask.isTransientRecordBufferUsed(),
+          storeIngestionTask.isActiveActiveReplicationEnabled(),
+          storeIngestionTask.getAggVersionedIngestionStats(),
+          storeIngestionTask.getHostLevelIngestionStats());
+    });
   }
 
   @Override
@@ -238,7 +260,7 @@ public class StorePartitionDataReceiver
     if (batches.isEmpty()) {
       return;
     }
-    IngestionBatchProcessor ingestionBatchProcessor = storeIngestionTask.getIngestionBatchProcessor();
+    IngestionBatchProcessor ingestionBatchProcessor = ingestionBatchProcessorLazy.get();
     if (ingestionBatchProcessor == null) {
       throw new VeniceException(
           "IngestionBatchProcessor object should present for store version: "
