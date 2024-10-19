@@ -81,7 +81,7 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
   private final AggVersionedIngestionStats aggVersionedIngestionStats;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
-  private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
+  // private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
 
   private static class ReusableObjects {
     // reuse buffer for rocksDB value object
@@ -141,22 +141,22 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
             isWriteComputationEnabled,
             getServerConfig().isComputeFastAvroEnabled());
     this.remoteIngestionRepairService = builder.getRemoteIngestionRepairService();
-    this.ingestionBatchProcessorLazy = Lazy.of(() -> {
-      if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
-        LOGGER.info("AA/WC workload parallel processing enabled is false");
-        return null;
-      }
-      LOGGER.info("AA/WC workload parallel processing enabled is true");
-      return new IngestionBatchProcessor(
-          kafkaVersionTopic,
-          parallelProcessingThreadPool,
-          null,
-          this::processActiveActiveMessage,
-          isWriteComputationEnabled,
-          isActiveActiveReplicationEnabled(),
-          aggVersionedIngestionStats,
-          getHostLevelIngestionStats());
-    });
+    // this.ingestionBatchProcessorLazy = Lazy.of(() -> {
+    // if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
+    // LOGGER.info("AA/WC workload parallel processing enabled is false");
+    // return null;
+    // }
+    // LOGGER.info("AA/WC workload parallel processing enabled is true");
+    // return new IngestionBatchProcessor(
+    // kafkaVersionTopic,
+    // parallelProcessingThreadPool,
+    // null,
+    // this::processActiveActiveMessage,
+    // isWriteComputationEnabled,
+    // isActiveActiveReplicationEnabled(),
+    // aggVersionedIngestionStats,
+    // getHostLevelIngestionStats());
+    // });
   }
 
   public static int getKeyLevelLockMaxPoolSizeBasedOnServerConfig(VeniceServerConfig serverConfig, int partitionCount) {
@@ -388,10 +388,10 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     return result.serialize();
   }
 
-  @Override
-  public IngestionBatchProcessor getIngestionBatchProcessor() {
-    return ingestionBatchProcessorLazy.get();
-  }
+  // @Override
+  // public IngestionBatchProcessor getIngestionBatchProcessor() {
+  // return ingestionBatchProcessorLazy.get();
+  // }
 
   @Override
   protected PubSubMessageProcessedResult processActiveActiveMessage(
