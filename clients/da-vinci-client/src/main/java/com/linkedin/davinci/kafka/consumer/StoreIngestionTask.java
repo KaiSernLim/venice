@@ -4377,12 +4377,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       PubSubMessageHeaders pubSubMessageHeaders,
       PartitionConsumptionState partitionConsumptionState);
 
-  protected abstract void validateRecordBeforeProducingToLocalKafka(
-      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
-      PartitionConsumptionState partitionConsumptionState,
-      String kafkaUrl,
-      int kafkaClusterId);
-
   protected abstract void recordRegionHybridConsumptionStats(
       int kafkaClusterId,
       int producedRecordSize,
@@ -4426,6 +4420,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
   public boolean isDataRecovery() {
     return isDataRecovery;
+  }
+
+  public String getLocalKafkaServer() {
+    return localKafkaServer;
+  }
+
+  public int getLocalKafkaClusterId() {
+    return localKafkaClusterId;
   }
 
   // For unit test purpose.
