@@ -4435,17 +4435,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     throw new VeniceException("processActiveActiveMessage() should only be called in active active mode");
   }
 
-  protected BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> getProduceToTopicFunction(
-      byte[] key,
-      ByteBuffer updatedValueBytes,
-      ByteBuffer updatedRmdBytes,
-      ChunkedValueManifest oldValueManifest,
-      ChunkedValueManifest oldRmdManifest,
-      int valueSchemaId,
-      boolean resultReuseInput) {
-    throw new VeniceException("getProduceToTopicFunction() should only be called in active active mode");
-  }
-
   public AggVersionedIngestionStats getAggVersionedIngestionStats() {
     throw new VeniceException("getAggVersionedIngestionStats() should only be called in active active mode");
   }

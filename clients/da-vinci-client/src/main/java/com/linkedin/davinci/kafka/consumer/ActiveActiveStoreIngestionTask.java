@@ -2,7 +2,6 @@ package com.linkedin.davinci.kafka.consumer;
 
 import static com.linkedin.davinci.kafka.consumer.LeaderFollowerStateType.LEADER;
 import static com.linkedin.venice.VeniceConstants.REWIND_TIME_DECIDED_BY_SERVER;
-import static com.linkedin.venice.writer.VeniceWriter.APP_DEFAULT_LOGICAL_TS;
 
 import com.linkedin.avroutil1.compatibility.AvroCompatibilityHelper;
 import com.linkedin.davinci.client.DaVinciRecordTransformer;
@@ -44,7 +43,6 @@ import com.linkedin.venice.pubsub.api.PubSubTopic;
 import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.schema.rmd.RmdUtils;
 import com.linkedin.venice.serialization.RawBytesStoreDeserializerCache;
-import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
 import com.linkedin.venice.utils.ByteUtils;
 import com.linkedin.venice.utils.LatencyUtils;
 import com.linkedin.venice.utils.Time;
@@ -52,7 +50,6 @@ import com.linkedin.venice.utils.Utils;
 import com.linkedin.venice.utils.lazy.Lazy;
 import com.linkedin.venice.writer.ChunkAwareCallback;
 import com.linkedin.venice.writer.LeaderMetadataWrapper;
-import com.linkedin.venice.writer.PutMetadata;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -1549,38 +1546,38 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     return aggVersionedIngestionStats;
   }
 
-  @Override
-  protected BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> getProduceToTopicFunction(
-      byte[] key,
-      ByteBuffer updatedValueBytes,
-      ByteBuffer updatedRmdBytes,
-      ChunkedValueManifest oldValueManifest,
-      ChunkedValueManifest oldRmdManifest,
-      int valueSchemaId,
-      boolean resultReuseInput) {
-    return (callback, leaderMetadataWrapper) -> {
-      if (resultReuseInput) {
-        // Restore the original header so this function is eventually idempotent as the original KME ByteBuffer
-        // will be recovered after producing the message to Kafka or if the production failing.
-        ((ActiveActiveProducerCallback) callback).setOnCompletionFunction(
-            () -> ByteUtils.prependIntHeaderToByteBuffer(
-                updatedValueBytes,
-                ByteUtils.getIntHeaderFromByteBuffer(updatedValueBytes),
-                true));
-      }
-      getVeniceWriter().get()
-          .put(
-              key,
-              ByteUtils.extractByteArray(updatedValueBytes),
-              valueSchemaId,
-              callback,
-              leaderMetadataWrapper,
-              APP_DEFAULT_LOGICAL_TS,
-              new PutMetadata(getRmdProtocolVersionId(), updatedRmdBytes),
-              oldValueManifest,
-              oldRmdManifest);
-    };
-  }
+  // @Override
+  // protected BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> getProduceToTopicFunction(
+  // byte[] key,
+  // ByteBuffer updatedValueBytes,
+  // ByteBuffer updatedRmdBytes,
+  // ChunkedValueManifest oldValueManifest,
+  // ChunkedValueManifest oldRmdManifest,
+  // int valueSchemaId,
+  // boolean resultReuseInput) {
+  // return (callback, leaderMetadataWrapper) -> {
+  // if (resultReuseInput) {
+  // // Restore the original header so this function is eventually idempotent as the original KME ByteBuffer
+  // // will be recovered after producing the message to Kafka or if the production failing.
+  // ((ActiveActiveProducerCallback) callback).setOnCompletionFunction(
+  // () -> ByteUtils.prependIntHeaderToByteBuffer(
+  // updatedValueBytes,
+  // ByteUtils.getIntHeaderFromByteBuffer(updatedValueBytes),
+  // true));
+  // }
+  // getVeniceWriter().get()
+  // .put(
+  // key,
+  // ByteUtils.extractByteArray(updatedValueBytes),
+  // valueSchemaId,
+  // callback,
+  // leaderMetadataWrapper,
+  // APP_DEFAULT_LOGICAL_TS,
+  // new PutMetadata(getRmdProtocolVersionId(), updatedRmdBytes),
+  // oldValueManifest,
+  // oldRmdManifest);
+  // };
+  // }
 
   protected LeaderProducerCallback createProducerCallback(
       PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
