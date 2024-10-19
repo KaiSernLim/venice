@@ -3908,6 +3908,10 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     return versionTopic;
   }
 
+  public PubSubTopic getRealTimeTopic() {
+    return realTimeTopic;
+  }
+
   public boolean isMetricsEmissionEnabled() {
     return emitMetrics.get();
   }
@@ -4399,11 +4403,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       LeaderCompleteState leaderCompleteState,
       long originTimeStampMs);
 
-  protected abstract ByteBuffer maybeCompressData(
-      int partition,
-      ByteBuffer data,
-      PartitionConsumptionState partitionConsumptionState);
-
   protected abstract GenericRecord readStoredValueRecord(
       PartitionConsumptionState partitionConsumptionState,
       byte[] keyBytes,
@@ -4461,6 +4460,10 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
   public int getLocalKafkaClusterId() {
     return localKafkaClusterId;
+  }
+
+  public PubSubTopicRepository getPubSubTopicRepository() {
+    return pubSubTopicRepository;
   }
 
   // For unit test purpose.
