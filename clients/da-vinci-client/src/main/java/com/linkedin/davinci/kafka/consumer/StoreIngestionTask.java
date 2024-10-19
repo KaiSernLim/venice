@@ -1106,11 +1106,12 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     }
   }
 
-  public abstract Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> validateAndFilterOutDuplicateMessagesFromLeaderTopic(
-      Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> records,
-      String kafkaUrl,
-      PubSubTopicPartition topicPartition);
-
+  // public abstract Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>>
+  // validateAndFilterOutDuplicateMessagesFromLeaderTopic(
+  // Iterable<PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long>> records,
+  // String kafkaUrl,
+  // PubSubTopicPartition topicPartition);
+  //
   // public int handleSingleMessage(
   // PubSubMessageProcessedResultWrapper<KafkaKey, KafkaMessageEnvelope, Long> consumerRecordWrapper,
   // PubSubTopicPartition topicPartition,
@@ -3040,6 +3041,8 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     // NoOp
   }
 
+  protected abstract boolean shouldProduceToVersionTopic(PartitionConsumptionState partitionConsumptionState);
+
   protected boolean processTopicSwitch(
       ControlMessage controlMessage,
       int partition,
@@ -4594,6 +4597,16 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   public SparseConcurrentList<Object> getDeserializedSchemaIds() {
     return deserializedSchemaIds;
   }
+
+  public boolean isGlobalRtDivEnabled() {
+    return isGlobalRtDivEnabled;
+  }
+
+  public Consumer<DataValidationException> getDivErrorMetricCallback() {
+    return divErrorMetricCallback;
+  }
+
+  public abstract KafkaDataIntegrityValidator getKafkaDataIntegrityValidatorForLeaders();
 
   // For unit test purpose.
   void setVersionRole(PartitionReplicaIngestionContext.VersionRole versionRole) {
