@@ -29,6 +29,7 @@ import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.schema.SchemaEntry;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
 import com.linkedin.venice.serializer.AvroGenericDeserializer;
+import com.linkedin.venice.storage.protocol.ChunkedValueManifest;
 import com.linkedin.venice.utils.ByteUtils;
 import com.linkedin.venice.utils.ExceptionUtils;
 import com.linkedin.venice.utils.LatencyUtils;
@@ -36,6 +37,7 @@ import com.linkedin.venice.utils.SparseConcurrentList;
 import com.linkedin.venice.utils.Utils;
 import com.linkedin.venice.utils.ValueHolder;
 import com.linkedin.venice.writer.ChunkAwareCallback;
+import com.linkedin.venice.writer.DeleteMetadata;
 import com.linkedin.venice.writer.LeaderCompleteState;
 import com.linkedin.venice.writer.LeaderMetadataWrapper;
 import com.linkedin.venice.writer.VeniceWriter;
@@ -1206,7 +1208,7 @@ public class StorePartitionDataReceiver
           storeIngestionTask.getHostLevelIngestionStats()
               .recordViewProducerLatency(LatencyUtils.getElapsedTimeFromMsToMs(preprocessingTime));
           if (exception == null) {
-            storeIngestionTask.producePutOrDeleteToKafka(
+            producePutOrDeleteToKafka(
                 mergeConflictResultWrapper,
                 partitionConsumptionState,
                 keyBytes,
@@ -1227,7 +1229,7 @@ public class StorePartitionDataReceiver
         // This function may modify the original record in KME and it is unsafe to use the payload from KME directly
         // after
         // this call.
-        storeIngestionTask.producePutOrDeleteToKafka(
+        producePutOrDeleteToKafka(
             mergeConflictResultWrapper,
             partitionConsumptionState,
             keyBytes,
@@ -1237,6 +1239,98 @@ public class StorePartitionDataReceiver
             kafkaClusterId,
             beforeProcessingRecordTimestampNs);
       }
+    }
+  }
+
+  /**
+   * This function parses the {@link MergeConflictResult} and decides if the update should be ignored or emit a PUT or a
+   * DELETE record to VT.
+   * <p>
+   * This function may modify the original record in KME and it is unsafe to use the payload from KME directly after
+   * this function.
+   *
+   * @param mergeConflictResultWrapper       The result of conflict resolution.
+   * @param partitionConsumptionState The {@link PartitionConsumptionState} of the current partition
+   * @param key                       The key bytes of the incoming record.
+   * @param consumerRecord            The {@link PubSubMessage} for the current record.
+   * @param partition
+   * @param kafkaUrl
+   */
+  private void producePutOrDeleteToKafka(
+      MergeConflictResultWrapper mergeConflictResultWrapper,
+      PartitionConsumptionState partitionConsumptionState,
+      byte[] key,
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      int partition,
+      String kafkaUrl,
+      int kafkaClusterId,
+      long beforeProcessingRecordTimestampNs) {
+    MergeConflictResult mergeConflictResult = mergeConflictResultWrapper.getMergeConflictResult();
+    ByteBuffer updatedValueBytes = mergeConflictResultWrapper.getUpdatedValueBytes();
+    ByteBuffer updatedRmdBytes = mergeConflictResultWrapper.getUpdatedRmdBytes();
+    final int valueSchemaId = mergeConflictResult.getValueSchemaId();
+
+    ChunkedValueManifest oldValueManifest = mergeConflictResultWrapper.getOldValueManifestContainer().getManifest();
+    ChunkedValueManifest oldRmdManifest = mergeConflictResultWrapper.getOldRmdWithValueSchemaId() == null
+        ? null
+        : mergeConflictResultWrapper.getOldRmdWithValueSchemaId().getRmdManifest();
+    // finally produce
+    if (mergeConflictResultWrapper.getUpdatedValueBytes() == null) {
+      storeIngestionTask.getHostLevelIngestionStats().recordTombstoneCreatedDCR();
+      storeIngestionTask.getAggVersionedIngestionStats()
+          .recordTombStoneCreationDCR(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
+      Delete deletePayload = new Delete();
+      deletePayload.schemaId = valueSchemaId;
+      deletePayload.replicationMetadataVersionId = storeIngestionTask.getRmdProtocolVersionId();
+      deletePayload.replicationMetadataPayload = mergeConflictResultWrapper.getUpdatedRmdBytes();
+      BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> produceToTopicFunction =
+          (callback, sourceTopicOffset) -> storeIngestionTask.getVeniceWriter()
+              .get()
+              .delete(
+                  key,
+                  callback,
+                  sourceTopicOffset,
+                  APP_DEFAULT_LOGICAL_TS,
+                  new DeleteMetadata(valueSchemaId, storeIngestionTask.getRmdProtocolVersionId(), updatedRmdBytes),
+                  oldValueManifest,
+                  oldRmdManifest);
+      LeaderProducedRecordContext leaderProducedRecordContext =
+          LeaderProducedRecordContext.newDeleteRecord(kafkaClusterId, consumerRecord.getOffset(), key, deletePayload);
+      storeIngestionTask.produceToLocalKafka(
+          consumerRecord,
+          partitionConsumptionState,
+          leaderProducedRecordContext,
+          produceToTopicFunction,
+          partition,
+          kafkaUrl,
+          kafkaClusterId,
+          beforeProcessingRecordTimestampNs);
+    } else {
+      Put updatedPut = new Put();
+      updatedPut.putValue = ByteUtils
+          .prependIntHeaderToByteBuffer(updatedValueBytes, valueSchemaId, mergeConflictResult.doesResultReuseInput());
+      updatedPut.schemaId = valueSchemaId;
+      updatedPut.replicationMetadataVersionId = storeIngestionTask.getRmdProtocolVersionId();
+      updatedPut.replicationMetadataPayload = updatedRmdBytes;
+
+      BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> produceToTopicFunction =
+          storeIngestionTask.getProduceToTopicFunction(
+              key,
+              updatedValueBytes,
+              updatedRmdBytes,
+              oldValueManifest,
+              oldRmdManifest,
+              valueSchemaId,
+              mergeConflictResult.doesResultReuseInput());
+      storeIngestionTask.produceToLocalKafka(
+          consumerRecord,
+          partitionConsumptionState,
+          LeaderProducedRecordContext.newPutRecord(kafkaClusterId, consumerRecord.getOffset(), key, updatedPut),
+          produceToTopicFunction,
+          partition,
+          kafkaUrl,
+          kafkaClusterId,
+          beforeProcessingRecordTimestampNs);
     }
   }
 
