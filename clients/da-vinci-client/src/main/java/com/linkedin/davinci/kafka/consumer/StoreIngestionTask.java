@@ -120,6 +120,7 @@ import com.linkedin.venice.utils.lazy.Lazy;
 import com.linkedin.venice.writer.ChunkAwareCallback;
 import com.linkedin.venice.writer.LeaderCompleteState;
 import com.linkedin.venice.writer.LeaderMetadataWrapper;
+import com.linkedin.venice.writer.VeniceWriter;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import java.io.Closeable;
 import java.io.IOException;
@@ -4683,7 +4684,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   }
 
   protected BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> getProduceToTopicFunction(
-      PartitionConsumptionState partitionConsumptionState,
       byte[] key,
       ByteBuffer updatedValueBytes,
       ByteBuffer updatedRmdBytes,
@@ -4701,6 +4701,9 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   public int getRmdProtocolVersionId() {
     throw new VeniceException("getRmdProtocolVersionId() should only be called in active active mode");
   }
+
+  protected abstract Lazy<VeniceWriter<byte[], byte[], byte[]>> getVeniceWriter(
+      PartitionConsumptionState partitionConsumptionState);
 
   protected abstract void setRealTimeVeniceWriterRef(PartitionConsumptionState partitionConsumptionState);
 
