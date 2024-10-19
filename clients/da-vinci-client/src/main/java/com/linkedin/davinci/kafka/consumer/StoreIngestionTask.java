@@ -116,7 +116,6 @@ import com.linkedin.venice.utils.concurrent.VeniceConcurrentHashMap;
 import com.linkedin.venice.utils.lazy.Lazy;
 import com.linkedin.venice.writer.ChunkAwareCallback;
 import com.linkedin.venice.writer.LeaderMetadataWrapper;
-import com.linkedin.venice.writer.VeniceWriter;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import java.io.Closeable;
 import java.io.IOException;
@@ -4624,12 +4623,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       PubSubMessageHeaders pubSubMessageHeaders,
       PartitionConsumptionState partitionConsumptionState);
 
-  protected abstract void validateRecordBeforeProducingToLocalKafka(
-      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
-      PartitionConsumptionState partitionConsumptionState,
-      String kafkaUrl,
-      int kafkaClusterId);
-
   protected abstract void recordRegionHybridConsumptionStats(
       int kafkaClusterId,
       int producedRecordSize,
@@ -4673,6 +4666,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
   public boolean isDataRecovery() {
     return isDataRecovery;
+  }
+
+  public String getLocalKafkaServer() {
+    return localKafkaServer;
+  }
+
+  public int getLocalKafkaClusterId() {
+    return localKafkaClusterId;
   }
 
   // For unit test purpose.
