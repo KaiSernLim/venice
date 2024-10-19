@@ -82,6 +82,7 @@ import com.linkedin.venice.partitioner.VenicePartitioner;
 import com.linkedin.venice.pubsub.PubSubTopicPartitionImpl;
 import com.linkedin.venice.pubsub.PubSubTopicRepository;
 import com.linkedin.venice.pubsub.api.PubSubMessage;
+import com.linkedin.venice.pubsub.api.PubSubMessageHeaders;
 import com.linkedin.venice.pubsub.api.PubSubTopic;
 import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.pubsub.api.exceptions.PubSubUnsubscribedTopicPartitionException;
@@ -110,6 +111,9 @@ import com.linkedin.venice.utils.Utils;
 import com.linkedin.venice.utils.VeniceProperties;
 import com.linkedin.venice.utils.concurrent.VeniceConcurrentHashMap;
 import com.linkedin.venice.utils.lazy.Lazy;
+import com.linkedin.venice.writer.ChunkAwareCallback;
+import com.linkedin.venice.writer.LeaderMetadataWrapper;
+import com.linkedin.venice.writer.VeniceWriter;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import java.io.Closeable;
 import java.nio.ByteBuffer;
@@ -138,6 +142,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -2979,7 +2984,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       case START_OF_SEGMENT:
       case END_OF_SEGMENT:
         /**
-         * Nothing to do here as all the processing is being done in {@link StoreIngestionTask#delegateConsumerRecord(ConsumerRecord, int, String)}.
+         * Nothing to do here as all the processing is being done in {@link StorePartitionDataReceiver#delegateConsumerRecord}.
          */
         break;
       case START_OF_INCREMENTAL_PUSH:
@@ -4119,34 +4124,36 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     storeBufferService.drainBufferedRecordsFromTopicPartition(topicPartition);
   }
 
-  protected abstract DelegateConsumerRecordResult delegateConsumerRecord(
-      PubSubMessageProcessedResultWrapper<KafkaKey, KafkaMessageEnvelope, Long> consumerRecordWrapper,
-      int partition,
-      String kafkaUrl,
-      int kafkaClusterId,
-      long beforeProcessingPerRecordTimestampNs,
-      long beforeProcessingBatchRecordsTimestampMs);
-
-  /**
-   * This enum represents all potential results after calling {@link #delegateConsumerRecord(PubSubMessageProcessedResultWrapper, int, String, int, long, long)}.
-   */
-  protected enum DelegateConsumerRecordResult {
-    /**
-     * The consumer record has been produced to local version topic by leader.
-     */
-    PRODUCED_TO_KAFKA,
-    /**
-     * The consumer record has been put into drainer queue; the following cases will result in putting to drainer directly:
-     * 1. Online/Offline ingestion task
-     * 2. Follower replicas
-     * 3. Leader is consuming from local version topics
-     */
-    QUEUED_TO_DRAINER,
-    /**
-     * The consumer record is skipped. e.g. remote VT's TS message during data recovery.
-     */
-    SKIPPED_MESSAGE
-  }
+  // protected abstract DelegateConsumerRecordResult delegateConsumerRecord(
+  // PubSubMessageProcessedResultWrapper<KafkaKey, KafkaMessageEnvelope, Long> consumerRecordWrapper,
+  // int partition,
+  // String kafkaUrl,
+  // int kafkaClusterId,
+  // long beforeProcessingPerRecordTimestampNs,
+  // long beforeProcessingBatchRecordsTimestampMs);
+  //
+  // /**
+  // * This enum represents all potential results after calling {@link
+  // #delegateConsumerRecord(PubSubMessageProcessedResultWrapper, int, String, int, long, long)}.
+  // */
+  // protected enum DelegateConsumerRecordResult {
+  // /**
+  // * The consumer record has been produced to local version topic by leader.
+  // */
+  // PRODUCED_TO_KAFKA,
+  // /**
+  // * The consumer record has been put into drainer queue; the following cases will result in putting to drainer
+  // directly:
+  // * 1. Online/Offline ingestion task
+  // * 2. Follower replicas
+  // * 3. Leader is consuming from local version topics
+  // */
+  // QUEUED_TO_DRAINER,
+  // /**
+  // * The consumer record is skipped. e.g. remote VT's TS message during data recovery.
+  // */
+  // SKIPPED_MESSAGE
+  // }
 
   /**
    * The method measures the time between receiving the message from the local VT and when the message is committed in
@@ -4359,7 +4366,67 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     return divErrorMetricCallback;
   }
 
+  public abstract Lazy<KeyLevelLocksManager> getKeyLevelLocksManager();
+
   public abstract KafkaDataIntegrityValidator getKafkaDataIntegrityValidatorForLeaders();
+
+  protected abstract void getAndUpdateLeaderCompletedState(
+      KafkaKey kafkaKey,
+      KafkaMessageEnvelope kafkaValue,
+      ControlMessage controlMessage,
+      PubSubMessageHeaders pubSubMessageHeaders,
+      PartitionConsumptionState partitionConsumptionState);
+
+  protected abstract void validateRecordBeforeProducingToLocalKafka(
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      PartitionConsumptionState partitionConsumptionState,
+      String kafkaUrl,
+      int kafkaClusterId);
+
+  protected abstract void recordRegionHybridConsumptionStats(
+      int kafkaClusterId,
+      int producedRecordSize,
+      long upstreamOffset,
+      long currentTimeMs);
+
+  protected abstract void updateLatestInMemoryLeaderConsumedRTOffset(
+      PartitionConsumptionState pcs,
+      String ignoredKafkaUrl,
+      long offset);
+
+  protected abstract void produceToLocalKafka(
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      PartitionConsumptionState partitionConsumptionState,
+      LeaderProducedRecordContext leaderProducedRecordContext,
+      BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> produceFunction,
+      int partition,
+      String kafkaUrl,
+      int kafkaClusterId,
+      long beforeProcessingRecordTimestampNs);
+
+  protected abstract void propagateHeartbeatFromUpstreamTopicToLocalVersionTopic(
+      PartitionConsumptionState partitionConsumptionState,
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      LeaderProducedRecordContext leaderProducedRecordContext,
+      int partition,
+      String kafkaUrl,
+      int kafkaClusterId,
+      long beforeProcessingRecordTimestampNs);
+
+  protected abstract void processMessageAndMaybeProduceToKafka(
+      PubSubMessageProcessedResultWrapper<KafkaKey, KafkaMessageEnvelope, Long> consumerRecordWrapper,
+      PartitionConsumptionState partitionConsumptionState,
+      int partition,
+      String kafkaUrl,
+      int kafkaClusterId,
+      long beforeProcessingRecordTimestampNs,
+      long beforeProcessingBatchRecordsTimestampMs);
+
+  protected abstract Lazy<VeniceWriter<byte[], byte[], byte[]>> getVeniceWriter();
+
+  public boolean isDataRecovery() {
+    return isDataRecovery;
+  }
 
   // For unit test purpose.
   void setVersionRole(PartitionReplicaIngestionContext.VersionRole versionRole) {
