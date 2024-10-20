@@ -3932,11 +3932,6 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   }
 
   @Override
-  public Lazy<KeyLevelLocksManager> getKeyLevelLocksManager() {
-    throw new VeniceException("getKeyLevelLocksManager() should only be called in active-active replication mode");
-  }
-
-  @Override
   public StoreWriteComputeProcessor getStoreWriteComputeHandler() {
     return storeWriteComputeHandler;
   }
