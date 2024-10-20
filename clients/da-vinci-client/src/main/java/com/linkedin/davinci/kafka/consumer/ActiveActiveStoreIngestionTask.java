@@ -6,7 +6,6 @@ import static com.linkedin.venice.VeniceConstants.REWIND_TIME_DECIDED_BY_SERVER;
 import com.linkedin.davinci.client.DaVinciRecordTransformer;
 import com.linkedin.davinci.config.VeniceServerConfig;
 import com.linkedin.davinci.config.VeniceStoreVersionConfig;
-import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
 import com.linkedin.venice.exceptions.PersistenceFailureException;
 import com.linkedin.venice.exceptions.VeniceException;
@@ -57,7 +56,7 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   // private final MergeConflictResolver mergeConflictResolver;
   // private final RmdSerDe rmdSerDe;
   // private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
-  private final AggVersionedIngestionStats aggVersionedIngestionStats;
+  // private final AggVersionedIngestionStats aggVersionedIngestionStats;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
   // private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
   //
@@ -96,7 +95,7 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
 
     this.rmdProtocolVersionId = version.getRmdVersionId();
 
-    this.aggVersionedIngestionStats = versionedIngestionStats;
+    // this.aggVersionedIngestionStats = versionedIngestionStats;
     // int knownKafkaClusterNumber = serverConfig.getKafkaClusterIdToUrlMap().size();
     //
     // int initialPoolSize = knownKafkaClusterNumber + 1;
@@ -1517,11 +1516,6 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   @Override
   public int getRmdProtocolVersionId() {
     return rmdProtocolVersionId;
-  }
-
-  @Override
-  public AggVersionedIngestionStats getAggVersionedIngestionStats() {
-    return aggVersionedIngestionStats;
   }
 
   // @Override
