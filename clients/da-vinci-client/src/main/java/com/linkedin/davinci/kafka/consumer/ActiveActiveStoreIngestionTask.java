@@ -6,10 +6,6 @@ import static com.linkedin.venice.VeniceConstants.REWIND_TIME_DECIDED_BY_SERVER;
 import com.linkedin.davinci.client.DaVinciRecordTransformer;
 import com.linkedin.davinci.config.VeniceServerConfig;
 import com.linkedin.davinci.config.VeniceStoreVersionConfig;
-import com.linkedin.davinci.replication.merge.MergeConflictResolver;
-import com.linkedin.davinci.replication.merge.MergeConflictResolverFactory;
-import com.linkedin.davinci.replication.merge.RmdSerDe;
-import com.linkedin.davinci.replication.merge.StringAnnotatedStoreSchemaCache;
 import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
 import com.linkedin.venice.exceptions.PersistenceFailureException;
@@ -34,7 +30,6 @@ import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.utils.ByteUtils;
 import com.linkedin.venice.utils.Time;
 import com.linkedin.venice.utils.Utils;
-import com.linkedin.venice.utils.lazy.Lazy;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -59,9 +54,9 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   // private static final byte[] BINARY_DECODER_PARAM = new byte[16];
 
   private final int rmdProtocolVersionId;
-  private final MergeConflictResolver mergeConflictResolver;
-  private final RmdSerDe rmdSerDe;
-  private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
+  // private final MergeConflictResolver mergeConflictResolver;
+  // private final RmdSerDe rmdSerDe;
+  // private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
   private final AggVersionedIngestionStats aggVersionedIngestionStats;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
   // private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
@@ -102,28 +97,28 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     this.rmdProtocolVersionId = version.getRmdVersionId();
 
     this.aggVersionedIngestionStats = versionedIngestionStats;
-    int knownKafkaClusterNumber = serverConfig.getKafkaClusterIdToUrlMap().size();
-
-    int initialPoolSize = knownKafkaClusterNumber + 1;
-    this.keyLevelLocksManager = Lazy.of(
-        () -> new KeyLevelLocksManager(
-            getVersionTopic().getName(),
-            initialPoolSize,
-            getKeyLevelLockMaxPoolSizeBasedOnServerConfig(serverConfig, storeVersionPartitionCount)));
-    StringAnnotatedStoreSchemaCache annotatedReadOnlySchemaRepository =
-        new StringAnnotatedStoreSchemaCache(storeName, schemaRepository);
-
-    this.rmdSerDe = new RmdSerDe(
-        annotatedReadOnlySchemaRepository,
-        rmdProtocolVersionId,
-        getServerConfig().isComputeFastAvroEnabled());
-    this.mergeConflictResolver = MergeConflictResolverFactory.getInstance()
-        .createMergeConflictResolver(
-            annotatedReadOnlySchemaRepository,
-            rmdSerDe,
-            getStoreName(),
-            isWriteComputationEnabled,
-            getServerConfig().isComputeFastAvroEnabled());
+    // int knownKafkaClusterNumber = serverConfig.getKafkaClusterIdToUrlMap().size();
+    //
+    // int initialPoolSize = knownKafkaClusterNumber + 1;
+    // this.keyLevelLocksManager = Lazy.of(
+    // () -> new KeyLevelLocksManager(
+    // getVersionTopic().getName(),
+    // initialPoolSize,
+    // getKeyLevelLockMaxPoolSizeBasedOnServerConfig(serverConfig, storeVersionPartitionCount)));
+    // StringAnnotatedStoreSchemaCache annotatedReadOnlySchemaRepository =
+    // new StringAnnotatedStoreSchemaCache(storeName, schemaRepository);
+    //
+    // this.rmdSerDe = new RmdSerDe(
+    // annotatedReadOnlySchemaRepository,
+    // rmdProtocolVersionId,
+    // getServerConfig().isComputeFastAvroEnabled());
+    // this.mergeConflictResolver = MergeConflictResolverFactory.getInstance()
+    // .createMergeConflictResolver(
+    // annotatedReadOnlySchemaRepository,
+    // rmdSerDe,
+    // getStoreName(),
+    // isWriteComputationEnabled,
+    // getServerConfig().isComputeFastAvroEnabled());
     this.remoteIngestionRepairService = builder.getRemoteIngestionRepairService();
     // this.ingestionBatchProcessorLazy = Lazy.of(() -> {
     // if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
@@ -347,12 +342,12 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   // .deserializeValueSchemaIdPrependedRmdBytes(replicationMetadataWithValueSchemaBytes, rmdWithValueSchemaId);
   // return rmdWithValueSchemaId;
   // }
-
-  @Override
-  public RmdSerDe getRmdSerDe() {
-    return rmdSerDe;
-  }
-
+  //
+  // @Override
+  // public RmdSerDe getRmdSerDe() {
+  // return rmdSerDe;
+  // }
+  //
   // /**
   // * This method tries to retrieve the RMD bytes with prepended value schema ID from storage engine. It will also
   // store
@@ -1525,18 +1520,8 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   }
 
   @Override
-  public final Lazy<KeyLevelLocksManager> getKeyLevelLocksManager() {
-    return keyLevelLocksManager;
-  }
-
-  @Override
   public AggVersionedIngestionStats getAggVersionedIngestionStats() {
     return aggVersionedIngestionStats;
-  }
-
-  @Override
-  public MergeConflictResolver getMergeConflictResolver() {
-    return mergeConflictResolver;
   }
 
   // @Override
