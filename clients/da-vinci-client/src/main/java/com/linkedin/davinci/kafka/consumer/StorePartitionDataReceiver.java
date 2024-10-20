@@ -164,7 +164,7 @@ public class StorePartitionDataReceiver
           processingFunction,
           storeIngestionTask.isTransientRecordBufferUsed(),
           storeIngestionTask.isActiveActiveReplicationEnabled(),
-          storeIngestionTask.getAggVersionedIngestionStats(),
+          storeIngestionTask.getVersionIngestionStats(),
           storeIngestionTask.getHostLevelIngestionStats());
     });
   }
@@ -1688,7 +1688,7 @@ public class StorePartitionDataReceiver
     long sourceOffset = consumerRecord.getOffset();
     final MergeConflictResult mergeConflictResult;
 
-    storeIngestionTask.getAggVersionedIngestionStats()
+    storeIngestionTask.getVersionIngestionStats()
         .recordTotalDCR(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
 
     Lazy<ByteBuffer> oldValueByteBufferProvider = unwrapByteBufferFromOldValueProvider(oldValueProvider);
@@ -1779,7 +1779,7 @@ public class StorePartitionDataReceiver
 
       if (updatedValueBytes == null) {
         storeIngestionTask.getHostLevelIngestionStats().recordTombstoneCreatedDCR();
-        storeIngestionTask.getAggVersionedIngestionStats()
+        storeIngestionTask.getVersionIngestionStats()
             .recordTombStoneCreationDCR(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
         partitionConsumptionState
             .setTransientRecord(kafkaClusterId, consumerRecord.getOffset(), keyBytes, valueSchemaId, rmdRecord);
@@ -1842,7 +1842,7 @@ public class StorePartitionDataReceiver
     // finally produce
     if (mergeConflictResultWrapper.getUpdatedValueBytes() == null) {
       storeIngestionTask.getHostLevelIngestionStats().recordTombstoneCreatedDCR();
-      storeIngestionTask.getAggVersionedIngestionStats()
+      storeIngestionTask.getVersionIngestionStats()
           .recordTombStoneCreationDCR(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
       Delete deletePayload = new Delete();
       deletePayload.schemaId = valueSchemaId;
@@ -2127,7 +2127,7 @@ public class StorePartitionDataReceiver
     if (offsetSumPreOperation > RmdUtils.extractOffsetVectorSumFromRmd(rmdRecord)) {
       // offsets went backwards, raise an alert!
       storeIngestionTask.getHostLevelIngestionStats().recordOffsetRegressionDCRError();
-      storeIngestionTask.getAggVersionedIngestionStats()
+      storeIngestionTask.getVersionIngestionStats()
           .recordOffsetRegressionDCRError(storeIngestionTask.getStoreName(), storeIngestionTask.getVersionNumber());
       LOGGER
           .error("Offset vector found to have gone backwards!! New invalid replication metadata result: {}", rmdRecord);
@@ -2142,7 +2142,7 @@ public class StorePartitionDataReceiver
       if (timestampsPreOperation.get(i) > timestampsPostOperation.get(i)) {
         // timestamps went backwards, raise an alert!
         storeIngestionTask.getHostLevelIngestionStats().recordTimestampRegressionDCRError();
-        storeIngestionTask.getAggVersionedIngestionStats()
+        storeIngestionTask.getVersionIngestionStats()
             .recordTimestampRegressionDCRError(
                 storeIngestionTask.getStoreName(),
                 storeIngestionTask.getVersionNumber());
