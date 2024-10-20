@@ -10,7 +10,6 @@ import com.linkedin.davinci.replication.merge.MergeConflictResolver;
 import com.linkedin.davinci.replication.merge.MergeConflictResolverFactory;
 import com.linkedin.davinci.replication.merge.RmdSerDe;
 import com.linkedin.davinci.replication.merge.StringAnnotatedStoreSchemaCache;
-import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.storage.StorageService;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
 import com.linkedin.venice.exceptions.PersistenceFailureException;
@@ -62,7 +61,7 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   private final MergeConflictResolver mergeConflictResolver;
   private final RmdSerDe rmdSerDe;
   // private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
-  private final AggVersionedIngestionStats aggVersionedIngestionStats;
+  // private final AggVersionedIngestionStats aggVersionedIngestionStats;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
   // private final Lazy<IngestionBatchProcessor> ingestionBatchProcessorLazy;
   //
@@ -105,7 +104,7 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
 
     this.rmdProtocolVersionId = version.getRmdVersionId();
 
-    this.aggVersionedIngestionStats = versionedIngestionStats;
+    // this.aggVersionedIngestionStats = versionedIngestionStats;
     // int knownKafkaClusterNumber = serverConfig.getKafkaClusterIdToUrlMap().size();
     //
     // int initialPoolSize = knownKafkaClusterNumber + 1;
@@ -1465,11 +1464,6 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   @Override
   MergeConflictResolver getMergeConflictResolver() {
     return mergeConflictResolver;
-  }
-
-  @Override
-  public AggVersionedIngestionStats getAggVersionedIngestionStats() {
-    return aggVersionedIngestionStats;
   }
 
   // @Override

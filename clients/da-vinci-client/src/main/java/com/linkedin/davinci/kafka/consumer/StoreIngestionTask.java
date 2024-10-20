@@ -4639,10 +4639,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       LeaderCompleteState leaderCompleteState,
       long originTimeStampMs);
 
-  public AggVersionedIngestionStats getAggVersionedIngestionStats() {
-    throw new VeniceException("getAggVersionedIngestionStats() should only be called in active active mode");
-  }
-
   public int getRmdProtocolVersionId() {
     throw new VeniceException("getRmdProtocolVersionId() should only be called in active active mode");
   }
