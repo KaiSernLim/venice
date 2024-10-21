@@ -6,6 +6,10 @@ import static com.linkedin.venice.VeniceConstants.REWIND_TIME_DECIDED_BY_SERVER;
 import com.linkedin.davinci.client.DaVinciRecordTransformer;
 import com.linkedin.davinci.config.VeniceServerConfig;
 import com.linkedin.davinci.config.VeniceStoreVersionConfig;
+import com.linkedin.davinci.replication.merge.MergeConflictResolver;
+import com.linkedin.davinci.replication.merge.MergeConflictResolverFactory;
+import com.linkedin.davinci.replication.merge.RmdSerDe;
+import com.linkedin.davinci.replication.merge.StringAnnotatedStoreSchemaCache;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
 import com.linkedin.venice.exceptions.PersistenceFailureException;
 import com.linkedin.venice.exceptions.VeniceException;
@@ -29,6 +33,7 @@ import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.utils.ByteUtils;
 import com.linkedin.venice.utils.Time;
 import com.linkedin.venice.utils.Utils;
+import com.linkedin.venice.utils.lazy.Lazy;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -52,6 +57,9 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   private static final Logger LOGGER = LogManager.getLogger(ActiveActiveStoreIngestionTask.class);
 
   private final int rmdProtocolVersionId;
+  private final MergeConflictResolver mergeConflictResolver;
+  private final RmdSerDe rmdSerDe;
+  private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
 
   public ActiveActiveStoreIngestionTask(
@@ -78,6 +86,29 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
         getRecordTransformer);
 
     this.rmdProtocolVersionId = version.getRmdVersionId();
+
+    int knownKafkaClusterNumber = serverConfig.getKafkaClusterIdToUrlMap().size();
+
+    int initialPoolSize = knownKafkaClusterNumber + 1;
+    this.keyLevelLocksManager = Lazy.of(
+        () -> new KeyLevelLocksManager(
+            getVersionTopic().getName(),
+            initialPoolSize,
+            getKeyLevelLockMaxPoolSizeBasedOnServerConfig(serverConfig, storeVersionPartitionCount)));
+    StringAnnotatedStoreSchemaCache annotatedReadOnlySchemaRepository =
+        new StringAnnotatedStoreSchemaCache(storeName, schemaRepository);
+
+    this.rmdSerDe = new RmdSerDe(
+        annotatedReadOnlySchemaRepository,
+        rmdProtocolVersionId,
+        getServerConfig().isComputeFastAvroEnabled());
+    this.mergeConflictResolver = MergeConflictResolverFactory.getInstance()
+        .createMergeConflictResolver(
+            annotatedReadOnlySchemaRepository,
+            rmdSerDe,
+            getStoreName(),
+            isWriteComputationEnabled,
+            getServerConfig().isComputeFastAvroEnabled());
     this.remoteIngestionRepairService = builder.getRemoteIngestionRepairService();
   }
 
@@ -194,6 +225,11 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     byte[] replicationMetadataBytesWithValueSchemaId = ByteUtils.extractByteArray(bufferWithHeader);
     bufferWithHeader.position(bufferWithHeader.position() + ByteUtils.SIZE_OF_INT);
     return replicationMetadataBytesWithValueSchemaId;
+  }
+
+  @Override
+  public RmdSerDe getRmdSerDe() {
+    return rmdSerDe;
   }
 
   @Override
@@ -798,5 +834,15 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   @Override
   public int getRmdProtocolVersionId() {
     return rmdProtocolVersionId;
+  }
+
+  @Override
+  public final Lazy<KeyLevelLocksManager> getKeyLevelLocksManager() {
+    return keyLevelLocksManager;
+  }
+
+  @Override
+  public MergeConflictResolver getMergeConflictResolver() {
+    return mergeConflictResolver;
   }
 }
