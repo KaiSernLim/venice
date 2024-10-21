@@ -753,7 +753,7 @@ public class StorePartitionDataReceiver
              * Simply produce this EOP to local VT. It will be processed in order in the drainer queue later
              * after successfully producing to kafka.
              */
-            storeIngestionTask.produceToLocalKafka(
+            produceToLocalKafka(
                 consumerRecord,
                 partitionConsumptionState,
                 leaderProducedRecordContext,
@@ -795,7 +795,7 @@ public class StorePartitionDataReceiver
              * In such case the heartbeat is produced to VT with updated {@link LeaderMetadataWrapper}.
              */
             if (!consumerRecord.getTopicPartition().getPubSubTopic().isRealTime()) {
-              storeIngestionTask.produceToLocalKafka(
+              produceToLocalKafka(
                   consumerRecord,
                   partitionConsumptionState,
                   leaderProducedRecordContext,
@@ -856,7 +856,7 @@ public class StorePartitionDataReceiver
              * to calculate DIV for this message but keeping the ControlMessage content unchanged. {@link VeniceWriter#put()} does not
              * allow that.
              */
-            storeIngestionTask.produceToLocalKafka(
+            produceToLocalKafka(
                 consumerRecord,
                 partitionConsumptionState,
                 leaderProducedRecordContext,
@@ -887,7 +887,7 @@ public class StorePartitionDataReceiver
             }
             leaderProducedRecordContext =
                 LeaderProducedRecordContext.newControlMessageRecord(kafkaKey.getKey(), controlMessage);
-            storeIngestionTask.produceToLocalKafka(
+            produceToLocalKafka(
                 consumerRecord,
                 partitionConsumptionState,
                 leaderProducedRecordContext,
@@ -1007,7 +1007,7 @@ public class StorePartitionDataReceiver
       case PUT:
         leaderProducedRecordContext =
             LeaderProducedRecordContext.newPutRecord(kafkaClusterId, consumerRecord.getOffset(), keyBytes, newPut);
-        storeIngestionTask.produceToLocalKafka(
+        produceToLocalKafka(
             consumerRecord,
             partitionConsumptionState,
             leaderProducedRecordContext,
@@ -1076,7 +1076,7 @@ public class StorePartitionDataReceiver
                     writeComputeResultWrapper.getOldValueManifest(),
                     null);
 
-        storeIngestionTask.produceToLocalKafka(
+        produceToLocalKafka(
             consumerRecord,
             partitionConsumptionState,
             leaderProducedRecordContext,
@@ -1090,7 +1090,7 @@ public class StorePartitionDataReceiver
       case DELETE:
         leaderProducedRecordContext = LeaderProducedRecordContext
             .newDeleteRecord(kafkaClusterId, consumerRecord.getOffset(), keyBytes, (Delete) kafkaValue.payloadUnion);
-        storeIngestionTask.produceToLocalKafka(
+        produceToLocalKafka(
             consumerRecord,
             partitionConsumptionState,
             leaderProducedRecordContext,
@@ -1287,7 +1287,7 @@ public class StorePartitionDataReceiver
                   oldRmdManifest);
       LeaderProducedRecordContext leaderProducedRecordContext =
           LeaderProducedRecordContext.newDeleteRecord(kafkaClusterId, consumerRecord.getOffset(), key, deletePayload);
-      storeIngestionTask.produceToLocalKafka(
+      produceToLocalKafka(
           consumerRecord,
           partitionConsumptionState,
           leaderProducedRecordContext,
@@ -1313,7 +1313,7 @@ public class StorePartitionDataReceiver
           oldRmdManifest,
           valueSchemaId,
           mergeConflictResult.doesResultReuseInput());
-      storeIngestionTask.produceToLocalKafka(
+      produceToLocalKafka(
           consumerRecord,
           partitionConsumptionState,
           LeaderProducedRecordContext.newPutRecord(kafkaClusterId, consumerRecord.getOffset(), key, updatedPut),
@@ -1386,6 +1386,39 @@ public class StorePartitionDataReceiver
       } catch (VeniceException offerToQueueException) {
         storeIngestionTask.setLastStoreIngestionException(offerToQueueException);
       }
+    }
+  }
+
+  void produceToLocalKafka(
+      PubSubMessage<KafkaKey, KafkaMessageEnvelope, Long> consumerRecord,
+      PartitionConsumptionState partitionConsumptionState,
+      LeaderProducedRecordContext leaderProducedRecordContext,
+      BiConsumer<ChunkAwareCallback, LeaderMetadataWrapper> produceFunction,
+      int partition,
+      String kafkaUrl,
+      int kafkaClusterId,
+      long beforeProcessingRecordTimestampNs) {
+    LeaderProducerCallback callback = storeIngestionTask.createProducerCallback(
+        consumerRecord,
+        partitionConsumptionState,
+        leaderProducedRecordContext,
+        partition,
+        kafkaUrl,
+        beforeProcessingRecordTimestampNs);
+    long sourceTopicOffset = consumerRecord.getOffset();
+    LeaderMetadataWrapper leaderMetadataWrapper = new LeaderMetadataWrapper(sourceTopicOffset, kafkaClusterId);
+    partitionConsumptionState.setLastLeaderPersistFuture(leaderProducedRecordContext.getPersistedToDBFuture());
+    long beforeProduceTimestampNS = System.nanoTime();
+    produceFunction.accept(callback, leaderMetadataWrapper);
+    storeIngestionTask.getHostLevelIngestionStats()
+        .recordLeaderProduceLatency(LatencyUtils.getElapsedTimeFromNSToMS(beforeProduceTimestampNS));
+
+    // Update the partition consumption state to say that we've transmitted the message to kafka (but haven't
+    // necessarily received an ack back yet).
+    if (storeIngestionTask.isActiveActiveReplicationEnabled()
+        && partitionConsumptionState.getLeaderFollowerState() == LeaderFollowerStateType.LEADER
+        && partitionConsumptionState.isHybrid() && consumerRecord.getTopicPartition().getPubSubTopic().isRealTime()) {
+      partitionConsumptionState.updateLatestRTOffsetTriedToProduceToVTMap(kafkaUrl, consumerRecord.getOffset());
     }
   }
 
