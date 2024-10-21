@@ -86,7 +86,6 @@ import com.linkedin.venice.partitioner.VenicePartitioner;
 import com.linkedin.venice.pubsub.PubSubTopicPartitionImpl;
 import com.linkedin.venice.pubsub.PubSubTopicRepository;
 import com.linkedin.venice.pubsub.api.PubSubMessage;
-import com.linkedin.venice.pubsub.api.PubSubMessageHeaders;
 import com.linkedin.venice.pubsub.api.PubSubProduceResult;
 import com.linkedin.venice.pubsub.api.PubSubProducerCallback;
 import com.linkedin.venice.pubsub.api.PubSubTopic;
@@ -4380,13 +4379,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   public abstract Lazy<KeyLevelLocksManager> getKeyLevelLocksManager();
 
   public abstract KafkaDataIntegrityValidator getKafkaDataIntegrityValidatorForLeaders();
-
-  protected abstract void getAndUpdateLeaderCompletedState(
-      KafkaKey kafkaKey,
-      KafkaMessageEnvelope kafkaValue,
-      ControlMessage controlMessage,
-      PubSubMessageHeaders pubSubMessageHeaders,
-      PartitionConsumptionState partitionConsumptionState);
 
   protected abstract void updateLatestInMemoryLeaderConsumedRTOffset(
       PartitionConsumptionState pcs,
