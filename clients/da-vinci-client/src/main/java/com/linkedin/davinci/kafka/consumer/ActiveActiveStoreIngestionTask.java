@@ -6,6 +6,10 @@ import static com.linkedin.venice.VeniceConstants.REWIND_TIME_DECIDED_BY_SERVER;
 import com.linkedin.davinci.client.DaVinciRecordTransformerFunctionalInterface;
 import com.linkedin.davinci.config.VeniceServerConfig;
 import com.linkedin.davinci.config.VeniceStoreVersionConfig;
+import com.linkedin.davinci.replication.merge.MergeConflictResolver;
+import com.linkedin.davinci.replication.merge.MergeConflictResolverFactory;
+import com.linkedin.davinci.replication.merge.RmdSerDe;
+import com.linkedin.davinci.replication.merge.StringAnnotatedStoreSchemaCache;
 import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.storage.StorageService;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
@@ -55,8 +59,8 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   // private static final byte[] BINARY_DECODER_PARAM = new byte[16];
 
   private final int rmdProtocolVersionId;
-  // private final MergeConflictResolver mergeConflictResolver;
-  // private final RmdSerDe rmdSerDe;
+  private final MergeConflictResolver mergeConflictResolver;
+  private final RmdSerDe rmdSerDe;
   // private final Lazy<KeyLevelLocksManager> keyLevelLocksManager;
   private final AggVersionedIngestionStats aggVersionedIngestionStats;
   private final RemoteIngestionRepairService remoteIngestionRepairService;
@@ -110,20 +114,20 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
     // getVersionTopic().getName(),
     // initialPoolSize,
     // getKeyLevelLockMaxPoolSizeBasedOnServerConfig(serverConfig, storeVersionPartitionCount)));
-    // StringAnnotatedStoreSchemaCache annotatedReadOnlySchemaRepository =
-    // new StringAnnotatedStoreSchemaCache(storeName, schemaRepository);
-    //
-    // this.rmdSerDe = new RmdSerDe(
-    // annotatedReadOnlySchemaRepository,
-    // rmdProtocolVersionId,
-    // getServerConfig().isComputeFastAvroEnabled());
-    // this.mergeConflictResolver = MergeConflictResolverFactory.getInstance()
-    // .createMergeConflictResolver(
-    // annotatedReadOnlySchemaRepository,
-    // rmdSerDe,
-    // getStoreName(),
-    // isWriteComputationEnabled,
-    // getServerConfig().isComputeFastAvroEnabled());
+    StringAnnotatedStoreSchemaCache annotatedReadOnlySchemaRepository =
+        new StringAnnotatedStoreSchemaCache(storeName, schemaRepository);
+
+    this.rmdSerDe = new RmdSerDe(
+        annotatedReadOnlySchemaRepository,
+        rmdProtocolVersionId,
+        getServerConfig().isComputeFastAvroEnabled());
+    this.mergeConflictResolver = MergeConflictResolverFactory.getInstance()
+        .createMergeConflictResolver(
+            annotatedReadOnlySchemaRepository,
+            rmdSerDe,
+            getStoreName(),
+            isWriteComputationEnabled,
+            getServerConfig().isComputeFastAvroEnabled());
     this.remoteIngestionRepairService = builder.getRemoteIngestionRepairService();
     // this.ingestionBatchProcessorLazy = Lazy.of(() -> {
     // if (!serverConfig.isAAWCWorkloadParallelProcessingEnabled()) {
@@ -348,12 +352,12 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   // .deserializeValueSchemaIdPrependedRmdBytes(replicationMetadataWithValueSchemaBytes, rmdWithValueSchemaId);
   // return rmdWithValueSchemaId;
   // }
-  //
-  // @Override
-  // public RmdSerDe getRmdSerDe() {
-  // return rmdSerDe;
-  // }
-  //
+
+  @Override
+  RmdSerDe getRmdSerDe() {
+    return rmdSerDe;
+  }
+
   // /**
   // * This method tries to retrieve the RMD bytes with prepended value schema ID from storage engine. It will also
   // store
@@ -1456,6 +1460,11 @@ public class ActiveActiveStoreIngestionTask extends LeaderFollowerStoreIngestion
   @Override
   public int getRmdProtocolVersionId() {
     return rmdProtocolVersionId;
+  }
+
+  @Override
+  MergeConflictResolver getMergeConflictResolver() {
+    return mergeConflictResolver;
   }
 
   @Override
