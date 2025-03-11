@@ -29,10 +29,8 @@ import com.linkedin.davinci.stats.ingestion.heartbeat.HeartbeatMonitoringService
 import com.linkedin.davinci.storage.StorageService;
 import com.linkedin.davinci.storage.chunking.ChunkedValueManifestContainer;
 import com.linkedin.davinci.storage.chunking.GenericRecordChunkingAdapter;
-import com.linkedin.davinci.storage.chunking.RawBytesChunkingAdapter;
 import com.linkedin.davinci.store.AbstractStorageEngine;
 import com.linkedin.davinci.store.cache.backend.ObjectCacheBackend;
-import com.linkedin.davinci.store.record.ByteBufferValueRecord;
 import com.linkedin.davinci.store.record.ValueRecord;
 import com.linkedin.davinci.store.view.ChangeCaptureViewWriter;
 import com.linkedin.davinci.store.view.MaterializedViewWriter;
@@ -82,7 +80,6 @@ import com.linkedin.venice.pubsub.api.PubSubTopicPartition;
 import com.linkedin.venice.schema.SchemaEntry;
 import com.linkedin.venice.schema.writecompute.DerivedSchemaEntry;
 import com.linkedin.venice.serialization.AvroStoreDeserializerCache;
-import com.linkedin.venice.serialization.RawBytesStoreDeserializerCache;
 import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serializer.RecordDeserializer;
@@ -705,21 +702,9 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
              */
             maybeApplyReadyToServeCheck(partitionConsumptionState);
 
-            kafkaClusterIdToUrlMap.forEach((clusterId, kafkaUrl) -> {
-              byte[] key = getGlobalRtDivKeyName(kafkaUrl).getBytes();
-              final ChunkedValueManifestContainer valueManifestContainer = new ChunkedValueManifestContainer();
-              ByteBufferValueRecord<ByteBuffer> originalValue = RawBytesChunkingAdapter.INSTANCE.getWithSchemaId(
-                  storageEngine,
-                  partition,
-                  ByteBuffer.wrap(key),
-                  isChunked,
-                  null,
-                  null,
-                  RawBytesStoreDeserializerCache.getInstance(),
-                  compressor.get(),
-                  valueManifestContainer);
-            });
-
+            if (isGlobalRtDivEnabled()) {
+              loadGlobalRtDiv(partitionConsumptionState);
+            }
           }
           break;
 
@@ -815,6 +800,44 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       veniceWriter =
           Lazy.of(() -> constructVeniceWriter(veniceWriterFactory, getVersionTopic().getName(), version, true, 1));
     }, getVersionTopic().getName());
+  }
+
+  /**
+   * Load the stored Global RT DIV object from the storage engine into the ConsumptionTask DIV during state transition
+   * to LEADER. The RT DIV needs to be loaded per-broker url, and the latest consumed RT offset needs to be updated.
+   */
+  private void loadGlobalRtDiv(PartitionConsumptionState pcs) {
+    final PubSubTopic topic = pcs.getOffsetRecord().getLeaderTopic(pubSubTopicRepository);
+    final PubSubTopicPartition topicPartition = new PubSubTopicPartitionImpl(topic, pcs.getPartition());
+
+    kafkaClusterIdToUrlMap.forEach((clusterId, brokerUrl) -> {
+      String globalRtDivKey = getGlobalRtDivKeyName(brokerUrl);
+      byte[] keyBytes = globalRtDivKey.getBytes();
+      final ChunkedValueManifestContainer valueManifestContainer = new ChunkedValueManifestContainer();
+      GenericRecord valueRecord = readStoredValueRecord(
+          pcs,
+          keyBytes,
+          AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion(),
+          topicPartition,
+          valueManifestContainer);
+      if (valueRecord == null) {
+        return; // it may not exist, and that's okay
+      }
+
+      Object value = valueRecord.get(globalRtDivKey);
+      if (value instanceof GlobalRtDivState) {
+        GlobalRtDivState globalRtDivState = (GlobalRtDivState) value;
+        final Map<CharSequence, ProducerPartitionState> producerStates = globalRtDivState.getProducerStates();
+        TopicType realTimeTopicType = TopicType.of(REALTIME_TOPIC_TYPE, brokerUrl);
+
+        kafkaDataIntegrityValidatorForLeaders.setPartitionState(realTimeTopicType, pcs.getPartition(), producerStates);
+
+        final long latestConsumedRtOffset = globalRtDivState.getLatestOffset(); // LCRO
+        pcs.updateLatestProcessedUpstreamRTOffset(brokerUrl, latestConsumedRtOffset);
+      } else {
+        LOGGER.warn("Unable to load Global RT DIV: {}", globalRtDivKey);
+      }
+    });
   }
 
   protected static boolean checkWhetherToCloseUnusedVeniceWriter(
