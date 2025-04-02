@@ -550,7 +550,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
           consumerSubscribe(
               topic,
               partitionConsumptionState,
-              partitionConsumptionState.getLocalVtSubscribeOffset(isGlobalRtDivEnabled()),
+              getLocalVtSubscribeOffset(partitionConsumptionState),
               localKafkaServer);
           /**
            * When switching leader to follower, we may adjust the underlying storage partition to optimize the performance.
@@ -741,7 +741,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             consumerSubscribe(
                 currentLeaderTopic,
                 partitionConsumptionState,
-                partitionConsumptionState.getLocalVtSubscribeOffset(isGlobalRtDivEnabled()),
+                getLocalVtSubscribeOffset(partitionConsumptionState),
                 localKafkaServer);
           }
 
@@ -4153,16 +4153,12 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     LOGGER.info(
         "Follower replica: {} unsubscribe finished for future resubscribe.",
         partitionConsumptionState.getReplicaId());
-    long latestProcessedLocalVersionTopicOffset = partitionConsumptionState.getLatestProcessedLocalVersionTopicOffset();
-    consumerSubscribe(
-        versionTopic,
-        partitionConsumptionState,
-        partitionConsumptionState.getLocalVtSubscribeOffset(isGlobalRtDivEnabled()),
-        localKafkaServer);
+    long subscribeOffset = getLocalVtSubscribeOffset(partitionConsumptionState);
+    consumerSubscribe(versionTopic, partitionConsumptionState, subscribeOffset, localKafkaServer);
     LOGGER.info(
         "Follower replica: {} resubscribe to offset: {}",
         partitionConsumptionState.getReplicaId(),
-        partitionConsumptionState.getLocalVtSubscribeOffset(isGlobalRtDivEnabled()));
+        subscribeOffset);
   }
 
   protected void resubscribeAsLeader(PartitionConsumptionState partitionConsumptionState) throws InterruptedException {
