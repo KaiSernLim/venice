@@ -2248,7 +2248,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
       // processConsumerActions.
       storageMetadataService.clearOffset(kafkaVersionTopic, partition);
       storageMetadataService.clearStoreVersionState(kafkaVersionTopic);
-      drainerDiv.clearPartition(partition);
+      getDataIntegrityValidator().clearPartition(partition);
       throw e;
     }
   }
@@ -2287,8 +2287,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
         partitionConsumptionStateMap.put(partition, newPartitionConsumptionState);
 
         // Load the VT segments from the offset record into the appropriate data integrity validator
-        final KafkaDataIntegrityValidator div = (isGlobalRtDivEnabled()) ? consumerDiv : drainerDiv;
-        div.setPartitionState(PartitionTracker.VERSION_TOPIC, partition, offsetRecord);
+        getDataIntegrityValidator().setPartitionState(PartitionTracker.VERSION_TOPIC, partition, offsetRecord);
 
         long consumptionStatePrepTimeStart = System.currentTimeMillis();
         if (!checkDatabaseIntegrity(partition, topic, offsetRecord, newPartitionConsumptionState)) {
@@ -2361,7 +2360,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
          */
         partitionConsumptionStateMap.remove(partition);
         storageUtilizationManager.removePartition(partition);
-        drainerDiv.clearPartition(partition);
+        getDataIntegrityValidator().clearPartition(partition);
         // Reset the error partition tracking
         PartitionExceptionInfo partitionExceptionInfo = partitionIngestionExceptionList.get(partition);
         if (partitionExceptionInfo != null) {
@@ -2447,7 +2446,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
           ingestionTaskName,
           topicPartition);
     }
-    drainerDiv.clearPartition(partition);
+    getDataIntegrityValidator().clearPartition(partition);
     storageMetadataService.clearOffset(topicPartition.getPubSubTopic().getName(), partition);
   }
 
@@ -4922,6 +4921,11 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
   boolean isGlobalRtDivEnabled() {
     return isGlobalRtDivEnabled; // mainly for unit test mocks
+  }
+
+  /** When Global RT DIV is enabled the ConsumptionTask's DIV is exclusively used to validate data integrity. */
+  KafkaDataIntegrityValidator getDataIntegrityValidator() {
+    return (isGlobalRtDivEnabled()) ? consumerDiv : drainerDiv;
   }
 
   /**
