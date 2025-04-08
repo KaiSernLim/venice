@@ -170,6 +170,11 @@ public class PartitionConsumptionState {
    */
   private final ConcurrentMap<String, Long> consumedUpstreamRTOffsetMap;
 
+  /**
+   * For Global RT DIV. When the RT DIV is loaded from disk, the LCRO must remain in-memory before the subscribe().
+   */
+  private final ConcurrentMap<String, Long> latestConsumedRtOffsetMap;
+
   // stores the SOP control message's producer timestamp.
   private long startOfPushTimestamp = 0;
 
@@ -251,6 +256,7 @@ public class PartitionConsumptionState {
     // Restore in-memory consumption RT upstream offset map and latest processed RT upstream offset map from the
     // checkpoint upstream offset map
     consumedUpstreamRTOffsetMap = new VeniceConcurrentHashMap<>();
+    latestConsumedRtOffsetMap = new VeniceConcurrentHashMap<>();
     latestProcessedUpstreamRTOffsetMap = new VeniceConcurrentHashMap<>();
     if (offsetRecord.getLeaderTopic() != null && Version.isRealTimeTopic(offsetRecord.getLeaderTopic())) {
       offsetRecord.cloneUpstreamOffsetMap(consumedUpstreamRTOffsetMap);
@@ -712,6 +718,14 @@ public class PartitionConsumptionState {
 
   public long getLeaderConsumedUpstreamRTOffset(String kafkaUrl) {
     return consumedUpstreamRTOffsetMap.getOrDefault(kafkaUrl, 0L);
+  }
+
+  public void updateLatestConsumedRtOffset(String brokerUrl, long offset) {
+    latestConsumedRtOffsetMap.put(brokerUrl, offset);
+  }
+
+  public long getLatestConsumedRtOffset(String brokerUrl) {
+    return latestConsumedRtOffsetMap.getOrDefault(brokerUrl, 0L);
   }
 
   public void updateLatestProcessedUpstreamRTOffset(String kafkaUrl, long offset) {
