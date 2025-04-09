@@ -3731,7 +3731,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     LeaderProducerCallback divCallback = createProducerCallback(
         divMessage,
         partitionConsumptionState,
-        leaderProducedRecordContext,
+        new LeaderProducedRecordContext(leaderProducedRecordContext),
         partition,
         brokerUrl,
         beforeProcessingRecordTimestampNs);
