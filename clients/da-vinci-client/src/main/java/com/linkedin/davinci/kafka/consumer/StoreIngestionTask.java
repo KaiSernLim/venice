@@ -1348,7 +1348,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
           metricsEnabled,
           elapsedTimeForPuttingIntoQueue);
       totalBytesRead += recordSize;
-      if (isGlobalRtDivEnabled) {
+      if (isGlobalRtDivEnabled()) {
         consumedBytesSinceLastSync.compute(kafkaUrl, (k, v) -> (v == null) ? recordSize : v + recordSize);
       }
     }
@@ -1875,7 +1875,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   }
 
   protected void updateOffsetMetadataAndSyncOffset(PartitionConsumptionState pcs) {
-    updateOffsetMetadataAndSyncOffset(isGlobalRtDivEnabled() ? this.consumerDiv : this.drainerDiv, pcs);
+    updateOffsetMetadataAndSyncOffset(getDataIntegrityValidator(), pcs);
   }
 
   protected void updateOffsetMetadataAndSyncOffset(KafkaDataIntegrityValidator div, PartitionConsumptionState pcs) {
