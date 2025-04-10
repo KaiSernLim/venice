@@ -1009,17 +1009,11 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     }
     partitionConsumptionState.getOffsetRecord().setLeaderTopic(newSourceTopic);
 
-    prepareOffsetCheckpointAndStartConsumptionAsLeader(newSourceTopic, partitionConsumptionState);
+    prepareOffsetCheckpointAndStartConsumptionAsLeader(newSourceTopic, partitionConsumptionState, false);
 
     // In case new topic is empty and leader can never become online
     // TODO: Remove this once after AGG store migration.
     maybeApplyReadyToServeCheck(partitionConsumptionState);
-  }
-
-  void prepareOffsetCheckpointAndStartConsumptionAsLeader(
-      PubSubTopic leaderTopic,
-      PartitionConsumptionState partitionConsumptionState) {
-    prepareOffsetCheckpointAndStartConsumptionAsLeader(leaderTopic, partitionConsumptionState, false);
   }
 
   /**
@@ -4229,7 +4223,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     LOGGER.info(
         "Leader replica: {} unsubscribe finished for future resubscribe.",
         partitionConsumptionState.getReplicaId());
-    prepareOffsetCheckpointAndStartConsumptionAsLeader(leaderTopic, partitionConsumptionState);
+    prepareOffsetCheckpointAndStartConsumptionAsLeader(leaderTopic, partitionConsumptionState, false);
   }
 
   protected void queueUpVersionTopicWritesWithViewWriters(
