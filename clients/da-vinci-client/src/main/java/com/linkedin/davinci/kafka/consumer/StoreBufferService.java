@@ -305,6 +305,7 @@ public class StoreBufferService extends AbstractStoreBufferService {
     DefaultPubSubMessage fakeRecord = new FakePubSubMessage(topicPartition);
     SyncVtDivNode syncDivNode = new SyncVtDivNode(fakeRecord, vtDivSnapshot, ingestionTask);
     getDrainerForConsumerRecord(fakeRecord, topicPartition.getPartitionNumber()).put(syncDivNode);
+    LOGGER.warn("ASDF execSyncOffsetFromSnapshotAsync()");
   }
 
   @Override
