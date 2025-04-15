@@ -3847,6 +3847,14 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
         topicPartition,
         valueManifestContainer);
     if (valueRecord == null) {
+      // TODO: should this be pcs.getLeaderConsumedUpstreamRTOffset(brokerUrl) > 0 instead?
+      // TODO: leaderOffset > 0 indicates that this is not hte first leader to be elected?
+      if (pcs.getLeaderOffset(brokerUrl, pubSubTopicRepository, false) > 0) {
+        LOGGER.warn(
+            "Unable to retrieve Global RT DIV from storage engine for replica: {} brokerUrl: {}",
+            topicPartition,
+            brokerUrl);
+      }
       return; // it may not exist (e.g. this is the first leader to be elected)
     }
 
@@ -3859,8 +3867,11 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       final long latestConsumedRtOffset = globalRtDivState.getLatestOffset(); // LCRO
       pcs.updateLatestConsumedRtOffset(brokerUrl, latestConsumedRtOffset);
     } else {
-      LOGGER.warn("Unable to load Global RT DIV: {}", globalRtDivKey);
-      // TODO: should we throw? or if we don't throw, which offset should the subscribe occur at?
+      LOGGER.warn(
+          "Unable to load Global RT DIV from storage engine for replica: {} brokerUrl: {}",
+          topicPartition,
+          brokerUrl);
+      // TODO: should we throw? or if we don't throw, which offset should the subscribe occur at? should be 0 huh
     }
   }
 
