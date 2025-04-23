@@ -1896,7 +1896,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
    * This version of the method syncs using a PartitionTracker object which contains the vtSegments and LCVO
    */
   protected void updateAndSyncOffsetFromSnapshot(PartitionTracker vtDivSnapshot, PubSubTopicPartition topicPartition) {
-    LOGGER.warn("ASDF updateAndSyncOffsetFromSnapshot()");
+    // LOGGER.warn("ASDF updateAndSyncOffsetFromSnapshot()");
     PartitionConsumptionState pcs = getPartitionConsumptionState(topicPartition.getPartitionNumber());
     vtDivSnapshot.updateOffsetRecord(PartitionTracker.VERSION_TOPIC, pcs.getOffsetRecord());
     updateOffsetMetadataInOffsetRecord(pcs);
@@ -2795,11 +2795,11 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     if (!record.getKey().isControlMessage()) {
       shouldSync = syncBytesInterval > 0 && (getConsumedBytesSinceLastSync().get(kafkaUrl) >= syncBytesInterval);
     }
-    LOGGER.info(
-        "ASDF shouldSendGlobalRtDiv(), syncBytesInterval: {} Since: {} Return Value: {}",
-        syncBytesInterval,
-        getConsumedBytesSinceLastSync().get(kafkaUrl),
-        shouldSync);
+    // LOGGER.info(
+    // "ASDF shouldSendGlobalRtDiv(), syncBytesInterval: {} Since: {} Return Value: {}",
+    // syncBytesInterval,
+    // getConsumedBytesSinceLastSync().get(kafkaUrl),
+    // shouldSync);
     return shouldSync;
   }
 
@@ -3406,13 +3406,18 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     // De-serialize payload into Venice Message format
     KafkaKey kafkaKey = consumerRecord.getKey();
     KafkaMessageEnvelope kafkaValue = consumerRecord.getValue();
+    // if (kafkaKey.isGlobalRtDiv()) {
+    // LOGGER.warn("asdf isGlobalRtDiv kafkaKey: {} schemaId: {}",
+    // kafkaKey,
+    // ((Put) kafkaValue.getPayloadUnion()).getSchemaId());
+    // }
     int sizeOfPersistedData = 0;
     boolean checkReadyToServeAfterProcess = false;
     try {
       long currentTimeMs = System.currentTimeMillis();
       if (recordLevelMetricEnabled.get()) {
         // Assumes the timestamp on the record is the broker's timestamp when it received the message.
-        LOGGER.warn("kafkaKey: {} kafkaValue: {} kafkaUrl: {}", kafkaKey, kafkaValue, kafkaUrl);
+        // LOGGER.warn("kafkaKey: {} kafkaValue: {} kafkaUrl: {}", kafkaKey, kafkaValue, kafkaUrl);
         long producerBrokerLatencyMs =
             Math.max(consumerRecord.getPubSubMessageTime() - kafkaValue.producerMetadata.messageTimestamp, 0);
         long brokerConsumerLatencyMs = Math.max(currentTimeMs - consumerRecord.getPubSubMessageTime(), 0);

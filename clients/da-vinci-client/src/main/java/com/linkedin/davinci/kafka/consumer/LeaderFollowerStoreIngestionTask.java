@@ -3623,7 +3623,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     final byte[] keyBytes = getGlobalRtDivKeyBytes(brokerUrl);
     final PubSubTopicPartition topicPartition = previousMessage.getTopicPartition();
     TopicType realTimeTopicType = TopicType.of(REALTIME_TOPIC_TYPE, brokerUrl);
-    LOGGER.warn("ASDF sendGlobalRtDivMessage()");
+    // LOGGER.warn("ASDF sendGlobalRtDivMessage()");
 
     // Snapshot the RT DIV (single broker URL) in preparation to be produced
     PartitionTracker vtDiv = consumerDiv.cloneVtProducerStates(partition); // includes latest consumed vt offset (LCVO)
@@ -3649,7 +3649,8 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     // Get the old value manifest which contains the list of old chunks, so they can be deleted
     final int schemaId = AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion();
     ChunkedValueManifestContainer valueManifestContainer = new ChunkedValueManifestContainer();
-    readGlobalRtDivState(keyBytes, schemaId, topicPartition, valueManifestContainer);
+    Optional<GlobalRtDivState> state = readGlobalRtDivState(keyBytes, schemaId, topicPartition, valueManifestContainer);
+    // LOGGER.warn("asdf brokerUrl={} manifestIsNull={}", brokerUrl, valueManifestContainer.getManifest() == null);
 
     // Produce to local VT for the Global RT DIV + latest RT offset (GlobalRtDivState)
     // Internally, VeniceWriter.put() will schedule DELETEs for the old chunks in the old manifest after the new PUTs

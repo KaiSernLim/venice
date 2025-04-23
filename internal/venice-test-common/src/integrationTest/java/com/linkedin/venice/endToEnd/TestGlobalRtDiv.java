@@ -21,6 +21,7 @@ import com.linkedin.venice.integration.utils.VeniceClusterCreateOptions;
 import com.linkedin.venice.integration.utils.VeniceClusterWrapper;
 import com.linkedin.venice.meta.PersistenceType;
 import com.linkedin.venice.meta.StoreInfo;
+import com.linkedin.venice.meta.Version;
 import com.linkedin.venice.pubsub.PubSubProducerAdapterFactory;
 import com.linkedin.venice.serializer.AvroSerializer;
 import com.linkedin.venice.utils.TestUtils;
@@ -54,7 +55,7 @@ public class TestGlobalRtDiv {
     Properties extraProperties = new Properties();
     extraProperties.setProperty(PERSISTENCE_TYPE, PersistenceType.ROCKS_DB.name());
     extraProperties.setProperty(SERVER_PROMOTION_TO_LEADER_REPLICA_DELAY_SECONDS, Long.toString(1L));
-    extraProperties.setProperty(SERVER_DATABASE_SYNC_BYTES_INTERNAL_FOR_TRANSACTIONAL_MODE, "5000");
+    extraProperties.setProperty(SERVER_DATABASE_SYNC_BYTES_INTERNAL_FOR_TRANSACTIONAL_MODE, "500");
 
     // N.B.: RF 2 with 3 servers is important, in order to test both the leader and follower code paths
     sharedVenice = ServiceFactory.getVeniceCluster(
@@ -126,12 +127,12 @@ public class TestGlobalRtDiv {
         DEFAULT_VALUE_SCHEMA,
         IntStream.range(0, keyCount).mapToObj(i -> new AbstractMap.SimpleEntry<>(i, i)));
 
-    Properties veniceWriterProperties = new Properties();
-    veniceWriterProperties.put(KAFKA_BOOTSTRAP_SERVERS, sharedVenice.getPubSubBrokerWrapper().getAddress());
+    Properties writerProperties = new Properties();
+    writerProperties.put(KAFKA_BOOTSTRAP_SERVERS, sharedVenice.getPubSubBrokerWrapper().getAddress());
 
     // Set max segment elapsed time to 0 to enforce creating small segments aggressively
-    veniceWriterProperties.put(VeniceWriter.MAX_ELAPSED_TIME_FOR_SEGMENT_IN_MS, "0");
-    veniceWriterProperties.putAll(
+    writerProperties.put(VeniceWriter.MAX_ELAPSED_TIME_FOR_SEGMENT_IN_MS, "0");
+    writerProperties.putAll(
         PubSubBrokerWrapper
             .getBrokerDetailsForClients(Collections.singletonList(sharedVenice.getPubSubBrokerWrapper())));
 
@@ -144,6 +145,9 @@ public class TestGlobalRtDiv {
     LOGGER.info("Finished creating VeniceClusterWrapper");
     long streamingRewindSeconds = 10L;
     long streamingMessageLag = 2L;
+    int numWriters = 2;
+    int messageCount = 100;
+    int perWriterMessageCount = messageCount / numWriters;
     String storeName = Utils.getUniqueString("hybrid-store");
     File inputDir = getTempDataDirectory();
     String inputDirPath = "file://" + inputDir.getAbsolutePath();
@@ -158,32 +162,28 @@ public class TestGlobalRtDiv {
           new UpdateStoreQueryParams().setHybridRewindSeconds(streamingRewindSeconds)
               .setHybridOffsetLagThreshold(streamingMessageLag)
               .setGlobalRtDivEnabled(true)
+              .setChunkingEnabled(true)
               .setPartitionCount(1));
       Assert.assertFalse(response.isError());
       // Do a VPJ push
       runVPJ(vpjProperties, 1, controllerClient);
-      Properties veniceWriterProperties = new Properties();
-      veniceWriterProperties.put(KAFKA_BOOTSTRAP_SERVERS, venice.getPubSubBrokerWrapper().getAddress());
-      /**
-       * Set max segment elapsed time to 0 to enforce creating small segments aggressively
-       */
-      veniceWriterProperties.put(VeniceWriter.MAX_ELAPSED_TIME_FOR_SEGMENT_IN_MS, "0");
-      veniceWriterProperties.putAll(
-          PubSubBrokerWrapper.getBrokerDetailsForClients(Collections.singletonList(venice.getPubSubBrokerWrapper())));
+      Properties writerProperties = new Properties();
+      writerProperties.put(KAFKA_BOOTSTRAP_SERVERS, venice.getPubSubBrokerWrapper().getAddress());
+      writerProperties.put(VeniceWriter.MAX_SIZE_FOR_USER_PAYLOAD_PER_MESSAGE_IN_BYTES, "100"); // force chunking
       AvroSerializer<String> stringSerializer = new AvroSerializer(STRING_SCHEMA);
       String prefix = "testGlobalRtDiv_";
       PubSubProducerAdapterFactory pubSubProducerAdapterFactory =
           venice.getPubSubBrokerWrapper().getPubSubClientsFactory().getProducerAdapterFactory();
       StoreInfo storeInfo = TestUtils.assertCommand(controllerClient.getStore(storeName)).getStore();
 
+      String resourceName = Version.composeKafkaTopic(storeName, 1);
       // chunk the data into 2 parts and send each part by different producers. Also, close the producers
-      // as soon as it finishes writing. This makes sure that closing or switching producers won't
-      // impact the ingestion
-      for (int i = 0; i < 2; i++) {
+      // as soon as it finishes writing. This makes sure that closing or switching producers won't impact the ingestion
+      for (int i = 0; i < numWriters; i++) {
         try (VeniceWriter<byte[], byte[], byte[]> realTimeTopicWriter =
-            TestUtils.getVeniceWriterFactory(veniceWriterProperties, pubSubProducerAdapterFactory)
+            TestUtils.getVeniceWriterFactory(writerProperties, pubSubProducerAdapterFactory)
                 .createVeniceWriter(new VeniceWriterOptions.Builder(Utils.getRealTimeTopicName(storeInfo)).build())) {
-          for (int j = i * 50 + 1; j <= i * 50 + 50; j++) {
+          for (int j = i * perWriterMessageCount + 1; j <= i * perWriterMessageCount + perWriterMessageCount; j++) {
             realTimeTopicWriter
                 .put(stringSerializer.serialize(String.valueOf(j)), stringSerializer.serialize(prefix + j), 1);
           }
@@ -193,7 +193,7 @@ public class TestGlobalRtDiv {
       // Check both leader and follower hosts
       TestUtils.waitForNonDeterministicAssertion(30, TimeUnit.SECONDS, true, true, () -> {
         try {
-          for (int i = 1; i <= 100; i++) {
+          for (int i = 1; i <= messageCount; i++) {
             String key = Integer.toString(i);
             Object value = client.get(key).get();
             assertNotNull(value, "Key " + i + " should not be missing!");
@@ -203,6 +203,40 @@ public class TestGlobalRtDiv {
           throw new VeniceException(e);
         }
       });
+
+      // /**
+      // * Restart leader SN (server1) to trigger leadership handover during batch consumption.
+      // * When server1 stops, sever2 will be promoted to leader. When server1 starts, due to full-auto rebalance,
+      // server2:
+      // * 1) Will be demoted to follower. Leader->standby transition during remote consumption will be tested.
+      // * 2) Or remain as leader. In this case, Leader->standby transition during remote consumption won't be tested.
+      // * TODO: Use semi-auto rebalance and assign a server as the leader to make sure leader->standby always happen.
+      // */
+      // HelixExternalViewRepository routingDataRepo = sharedVenice.getLeaderVeniceController()
+      // .getVeniceHelixAdmin()
+      // .getHelixVeniceClusterResources(sharedVenice.getClusterName())
+      // .getRoutingDataRepository();
+      // Assert.assertTrue(routingDataRepo.containsKafkaTopic(resourceName), "Topic " + resourceName + " should exist");
+      //
+      // Instance leaderNode = routingDataRepo.getLeaderInstance(resourceName, 0);
+      // Assert.assertNotNull(leaderNode);
+      // LOGGER.info("Restart server port {}", leaderNode.getPort());
+      // sharedVenice.stopAndRestartVeniceServer(leaderNode.getPort());
+
+      // Utils.sleep(1000000);
+      String baseKey = "GLOBAL_RT_DIV_KEY.";
+      // for (int i = 1; i <= baseKey.length(); i++) {
+      // client.get(baseKey.substring(0, i));
+      // }
+
+      Utils.sleep(5000);
+      for (int i = 1; i <= baseKey.length(); i++) {
+        client.get(baseKey.substring(0, i) + venice.getPubSubBrokerWrapper().getAddress());
+      }
+      // client.get("GLOBAL_RT_DIV_KEY.localhost:12345");
+      String key = "GLOBAL_RT_DIV_KEY." + venice.getPubSubBrokerWrapper().getAddress();
+      Object value = client.get(key).get();
+      assertNull(value, "Key " + key + " should be missing!");
     }
   }
 }
