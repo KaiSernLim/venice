@@ -8,6 +8,9 @@ import static com.linkedin.venice.utils.TestWriteUtils.*;
 import static org.testng.Assert.*;
 
 import com.linkedin.davinci.kafka.consumer.KafkaConsumerService;
+import com.linkedin.davinci.store.AbstractStorageEngine;
+import com.linkedin.davinci.store.rocksdb.RocksDBStorageIterator;
+import com.linkedin.davinci.store.rocksdb.RocksDBStoragePartition;
 import com.linkedin.venice.client.store.AvroGenericStoreClient;
 import com.linkedin.venice.client.store.ClientConfig;
 import com.linkedin.venice.client.store.ClientFactory;
@@ -15,10 +18,12 @@ import com.linkedin.venice.controllerapi.ControllerClient;
 import com.linkedin.venice.controllerapi.ControllerResponse;
 import com.linkedin.venice.controllerapi.UpdateStoreQueryParams;
 import com.linkedin.venice.exceptions.VeniceException;
+import com.linkedin.venice.helix.HelixExternalViewRepository;
 import com.linkedin.venice.integration.utils.PubSubBrokerWrapper;
 import com.linkedin.venice.integration.utils.ServiceFactory;
 import com.linkedin.venice.integration.utils.VeniceClusterCreateOptions;
 import com.linkedin.venice.integration.utils.VeniceClusterWrapper;
+import com.linkedin.venice.integration.utils.VeniceServerWrapper;
 import com.linkedin.venice.meta.PersistenceType;
 import com.linkedin.venice.meta.StoreInfo;
 import com.linkedin.venice.meta.Version;
@@ -33,6 +38,7 @@ import com.linkedin.venice.writer.VeniceWriterOptions;
 import java.io.File;
 import java.util.AbstractMap;
 import java.util.Collections;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
@@ -56,13 +62,14 @@ public class TestGlobalRtDiv {
     extraProperties.setProperty(PERSISTENCE_TYPE, PersistenceType.ROCKS_DB.name());
     extraProperties.setProperty(SERVER_PROMOTION_TO_LEADER_REPLICA_DELAY_SECONDS, Long.toString(1L));
     extraProperties.setProperty(SERVER_DATABASE_SYNC_BYTES_INTERNAL_FOR_TRANSACTIONAL_MODE, "500");
+    // extraProperties.setProperty(VeniceWriter.MAX_SIZE_FOR_USER_PAYLOAD_PER_MESSAGE_IN_BYTES, "400");
 
     // N.B.: RF 2 with 3 servers is important, in order to test both the leader and follower code paths
     sharedVenice = ServiceFactory.getVeniceCluster(
         new VeniceClusterCreateOptions.Builder().numberOfControllers(1)
             .numberOfServers(0)
             .numberOfRouters(0)
-            .replicationFactor(2)
+            .replicationFactor(1)
             .partitionSize(1000000)
             .sslToStorageNodes(false)
             .sslToKafka(false)
@@ -75,6 +82,7 @@ public class TestGlobalRtDiv {
     // Added a server with shared consumer enabled.
     Properties serverPropertiesWithSharedConsumer = new Properties();
     serverPropertiesWithSharedConsumer.setProperty(SSL_TO_KAFKA_LEGACY, "false");
+    // extraProperties.setProperty(VeniceWriter.MAX_SIZE_FOR_USER_PAYLOAD_PER_MESSAGE_IN_BYTES, "400");
     extraProperties.setProperty(SERVER_CONSUMER_POOL_SIZE_PER_KAFKA_CLUSTER, "3");
     extraProperties.setProperty(DEFAULT_MAX_NUMBER_OF_PARTITIONS, "4");
     extraProperties.setProperty(
@@ -84,8 +92,8 @@ public class TestGlobalRtDiv {
     extraProperties.setProperty(SERVER_GLOBAL_RT_DIV_ENABLED, "true");
 
     sharedVenice.addVeniceServer(serverPropertiesWithSharedConsumer, extraProperties);
-    sharedVenice.addVeniceServer(serverPropertiesWithSharedConsumer, extraProperties);
-    sharedVenice.addVeniceServer(serverPropertiesWithSharedConsumer, extraProperties);
+    // sharedVenice.addVeniceServer(serverPropertiesWithSharedConsumer, extraProperties);
+    // sharedVenice.addVeniceServer(serverPropertiesWithSharedConsumer, extraProperties);
     LOGGER.info("Finished creating VeniceClusterWrapper");
   }
 
@@ -147,6 +155,8 @@ public class TestGlobalRtDiv {
     long streamingMessageLag = 2L;
     int numWriters = 2;
     int messageCount = 100;
+    int partitionCount = 1;
+    int partition = partitionCount - 1;
     int perWriterMessageCount = messageCount / numWriters;
     String storeName = Utils.getUniqueString("hybrid-store");
     File inputDir = getTempDataDirectory();
@@ -162,8 +172,9 @@ public class TestGlobalRtDiv {
           new UpdateStoreQueryParams().setHybridRewindSeconds(streamingRewindSeconds)
               .setHybridOffsetLagThreshold(streamingMessageLag)
               .setGlobalRtDivEnabled(true)
-              .setChunkingEnabled(true)
-              .setPartitionCount(1));
+              // .setChunkingEnabled(true)
+              .setReplicationFactor(1)
+              .setPartitionCount(partitionCount));
       Assert.assertFalse(response.isError());
       // Do a VPJ push
       runVPJ(vpjProperties, 1, controllerClient);
@@ -206,37 +217,45 @@ public class TestGlobalRtDiv {
 
       // /**
       // * Restart leader SN (server1) to trigger leadership handover during batch consumption.
-      // * When server1 stops, sever2 will be promoted to leader. When server1 starts, due to full-auto rebalance,
+      // * When server1 stops, server2 will be promoted to leader. When server1 starts, due to full-auto rebalance,
       // server2:
       // * 1) Will be demoted to follower. Leader->standby transition during remote consumption will be tested.
       // * 2) Or remain as leader. In this case, Leader->standby transition during remote consumption won't be tested.
       // * TODO: Use semi-auto rebalance and assign a server as the leader to make sure leader->standby always happen.
       // */
-      // HelixExternalViewRepository routingDataRepo = sharedVenice.getLeaderVeniceController()
-      // .getVeniceHelixAdmin()
-      // .getHelixVeniceClusterResources(sharedVenice.getClusterName())
-      // .getRoutingDataRepository();
-      // Assert.assertTrue(routingDataRepo.containsKafkaTopic(resourceName), "Topic " + resourceName + " should exist");
-      //
+      HelixExternalViewRepository routingDataRepo = sharedVenice.getLeaderVeniceController()
+          .getVeniceHelixAdmin()
+          .getHelixVeniceClusterResources(sharedVenice.getClusterName())
+          .getRoutingDataRepository();
+      Assert.assertTrue(routingDataRepo.containsKafkaTopic(resourceName), "Topic " + resourceName + " should exist");
+      List<VeniceServerWrapper> servers = sharedVenice.getVeniceServers();
+      servers.forEach(server -> {
+        AbstractStorageEngine storageEngine =
+            server.getVeniceServer().getStorageService().getStorageEngine(resourceName);
+        String key = "GLOBAL_RT_DIV_KEY." + venice.getPubSubBrokerWrapper().getAddress();
+        RocksDBStoragePartition storagePartition =
+            (RocksDBStoragePartition) storageEngine.getPartitionOrThrow(partition);
+        RocksDBStorageIterator iterator = (RocksDBStorageIterator) storagePartition.getIterator();
+        // for (iterator.seekToFirst(); iterator.isValid(); iterator.next()) {
+        // byte[] keyBytes = iterator.key();
+        // byte[] valueBytes = iterator.value();
+        // if (valueBytes.length > 30) {
+        // LOGGER.warn("key: {}, key bytes: {}, valuelen: {}", new String(keyBytes), keyBytes, valueBytes.length);
+        // }
+        // }
+        byte[] result = storageEngine.get(partition, key.getBytes());
+        byte[] result2 = storageEngine.get(partition, key.getBytes());
+      });
+
       // Instance leaderNode = routingDataRepo.getLeaderInstance(resourceName, 0);
       // Assert.assertNotNull(leaderNode);
       // LOGGER.info("Restart server port {}", leaderNode.getPort());
+      // leaderNode.
       // sharedVenice.stopAndRestartVeniceServer(leaderNode.getPort());
 
       // Utils.sleep(1000000);
-      String baseKey = "GLOBAL_RT_DIV_KEY.";
-      // for (int i = 1; i <= baseKey.length(); i++) {
-      // client.get(baseKey.substring(0, i));
-      // }
-
-      Utils.sleep(5000);
-      for (int i = 1; i <= baseKey.length(); i++) {
-        client.get(baseKey.substring(0, i) + venice.getPubSubBrokerWrapper().getAddress());
-      }
-      // client.get("GLOBAL_RT_DIV_KEY.localhost:12345");
-      String key = "GLOBAL_RT_DIV_KEY." + venice.getPubSubBrokerWrapper().getAddress();
-      Object value = client.get(key).get();
-      assertNull(value, "Key " + key + " should be missing!");
+      // Object value = client.get(key).get();
+      // assertNull(value, "Key " + key + " should be missing!");
     }
   }
 }

@@ -3667,6 +3667,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             valueManifestContainer.getManifest(),
             null,
             false);
+    LOGGER.warn("asdf consumer brokerUrl {} KEY BYTES {}", brokerUrl, keyBytes);
 
     consumedBytesSinceLastSync.put(brokerUrl, 0L); // reset the timer for the next sync, since RT DIV was just synced
   }
