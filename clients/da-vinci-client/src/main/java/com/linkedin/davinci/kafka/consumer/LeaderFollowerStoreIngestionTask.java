@@ -3753,8 +3753,9 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       int readerValueSchemaID,
       PubSubTopicPartition topicPartition,
       ChunkedValueManifestContainer manifestContainer) {
+    ByteBuffer value = null;
     try {
-      ByteBuffer currValue = (ByteBuffer) GenericChunkingAdapter.INSTANCE.get(
+      value = (ByteBuffer) GenericChunkingAdapter.INSTANCE.get(
           storageEngine,
           topicPartition.getPartitionNumber(),
           ByteBuffer.wrap(keyBytes),
@@ -3766,14 +3767,20 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
           RawBytesStoreDeserializerCache.getInstance(),
           compressor.get(),
           manifestContainer);
-      if (currValue != null) {
-        return Optional.of(
-            globalRtDivStateSerializer.deserialize(
-                ByteUtils.extractByteArray(currValue),
-                AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion()));
-      }
     } catch (Exception e) {
       LOGGER.error("Unable to retrieve stored value bytes", e);
+    }
+    return (value != null) ? deserializeGlobalRtDivState(value) : Optional.empty();
+  }
+
+  Optional<GlobalRtDivState> deserializeGlobalRtDivState(ByteBuffer valueBytes) {
+    try {
+      return Optional.of(
+          globalRtDivStateSerializer.deserialize(
+              ByteUtils.extractByteArray(valueBytes),
+              AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion()));
+    } catch (Exception e) {
+      LOGGER.error("Unable to deserialize stored value bytes", e);
     }
     return Optional.empty();
   }

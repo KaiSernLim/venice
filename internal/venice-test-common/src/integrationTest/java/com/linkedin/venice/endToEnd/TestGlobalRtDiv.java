@@ -8,6 +8,7 @@ import static com.linkedin.venice.utils.TestWriteUtils.*;
 import static org.testng.Assert.*;
 
 import com.linkedin.davinci.kafka.consumer.KafkaConsumerService;
+import com.linkedin.davinci.storage.chunking.ChunkingUtils;
 import com.linkedin.davinci.store.AbstractStorageEngine;
 import com.linkedin.davinci.store.rocksdb.RocksDBStorageIterator;
 import com.linkedin.davinci.store.rocksdb.RocksDBStoragePartition;
@@ -24,10 +25,13 @@ import com.linkedin.venice.integration.utils.ServiceFactory;
 import com.linkedin.venice.integration.utils.VeniceClusterCreateOptions;
 import com.linkedin.venice.integration.utils.VeniceClusterWrapper;
 import com.linkedin.venice.integration.utils.VeniceServerWrapper;
+import com.linkedin.venice.kafka.protocol.state.GlobalRtDivState;
 import com.linkedin.venice.meta.PersistenceType;
 import com.linkedin.venice.meta.StoreInfo;
 import com.linkedin.venice.meta.Version;
 import com.linkedin.venice.pubsub.PubSubProducerAdapterFactory;
+import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
+import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serializer.AvroSerializer;
 import com.linkedin.venice.utils.TestUtils;
 import com.linkedin.venice.utils.TestWriteUtils;
@@ -158,6 +162,7 @@ public class TestGlobalRtDiv {
     int partitionCount = 1;
     int partition = partitionCount - 1;
     int perWriterMessageCount = messageCount / numWriters;
+    boolean isChunkingEnabled = false;
     String storeName = Utils.getUniqueString("hybrid-store");
     File inputDir = getTempDataDirectory();
     String inputDirPath = "file://" + inputDir.getAbsolutePath();
@@ -172,7 +177,7 @@ public class TestGlobalRtDiv {
           new UpdateStoreQueryParams().setHybridRewindSeconds(streamingRewindSeconds)
               .setHybridOffsetLagThreshold(streamingMessageLag)
               .setGlobalRtDivEnabled(true)
-              // .setChunkingEnabled(true)
+              .setChunkingEnabled(isChunkingEnabled)
               .setReplicationFactor(1)
               .setPartitionCount(partitionCount));
       Assert.assertFalse(response.isError());
@@ -230,6 +235,7 @@ public class TestGlobalRtDiv {
       Assert.assertTrue(routingDataRepo.containsKafkaTopic(resourceName), "Topic " + resourceName + " should exist");
       List<VeniceServerWrapper> servers = sharedVenice.getVeniceServers();
       servers.forEach(server -> {
+        // server.getVeniceServer().getStorageService().get;
         AbstractStorageEngine storageEngine =
             server.getVeniceServer().getStorageService().getStorageEngine(resourceName);
         String key = "GLOBAL_RT_DIV_KEY." + venice.getPubSubBrokerWrapper().getAddress();
@@ -243,8 +249,17 @@ public class TestGlobalRtDiv {
         // LOGGER.warn("key: {}, key bytes: {}, valuelen: {}", new String(keyBytes), keyBytes, valueBytes.length);
         // }
         // }
-        byte[] result = storageEngine.get(partition, key.getBytes());
-        byte[] result2 = storageEngine.get(partition, key.getBytes());
+        byte[] keyBytes = key.getBytes();
+        if (isChunkingEnabled) {
+          keyBytes = ChunkingUtils.KEY_WITH_CHUNKING_SUFFIX_SERIALIZER.serializeNonChunkedKey(key.getBytes());
+        }
+        byte[] result = storageEngine.get(partition, keyBytes);
+        InternalAvroSpecificSerializer<GlobalRtDivState> globalRtDivStateSerializer =
+            AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getSerializer();
+
+        GlobalRtDivState globalRtDiv = globalRtDivStateSerializer
+            .deserialize(result, AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion());
+        Assert.assertNotNull(globalRtDiv);
       });
 
       // Instance leaderNode = routingDataRepo.getLeaderInstance(resourceName, 0);
