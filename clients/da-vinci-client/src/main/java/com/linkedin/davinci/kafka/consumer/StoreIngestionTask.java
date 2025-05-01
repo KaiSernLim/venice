@@ -3406,11 +3406,12 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     // De-serialize payload into Venice Message format
     KafkaKey kafkaKey = consumerRecord.getKey();
     KafkaMessageEnvelope kafkaValue = consumerRecord.getValue();
-    // if (kafkaKey.isGlobalRtDiv()) {
-    // LOGGER.warn("asdf isGlobalRtDiv kafkaKey: {} schemaId: {}",
-    // kafkaKey,
-    // ((Put) kafkaValue.getPayloadUnion()).getSchemaId());
-    // }
+    if (kafkaKey.isGlobalRtDiv()) {
+      LOGGER.warn(
+          "asdf isGlobalRtDiv kafkaKey: {} schemaId: {}",
+          kafkaKey,
+          ((Put) kafkaValue.getPayloadUnion()).getSchemaId());
+    }
     int sizeOfPersistedData = 0;
     boolean checkReadyToServeAfterProcess = false;
     try {
@@ -4031,9 +4032,9 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               currentTimeMs);
           writeToStorageEngine(producedPartition, keyBytes, put);
         } else {
-          if (kafkaKey.isGlobalRtDiv() && put.getSchemaId() != -10) {
-            LOGGER.warn("asdf Drainer key bytes {}", keyBytes);
-          }
+          // if (kafkaKey.isGlobalRtDiv() && put.getSchemaId() != -10) {
+          // LOGGER.warn("asdf Drainer key bytes {}", keyBytes);
+          // }
           prependHeaderAndWriteToStorageEngine(
               // Leaders might consume from a RT topic and immediately write into StorageEngine,
               // so we need to re-calculate partition.

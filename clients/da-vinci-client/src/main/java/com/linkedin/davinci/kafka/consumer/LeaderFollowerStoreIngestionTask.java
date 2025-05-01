@@ -3623,7 +3623,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     final byte[] keyBytes = getGlobalRtDivKeyBytes(brokerUrl);
     final PubSubTopicPartition topicPartition = previousMessage.getTopicPartition();
     TopicType realTimeTopicType = TopicType.of(REALTIME_TOPIC_TYPE, brokerUrl);
-    // LOGGER.warn("ASDF sendGlobalRtDivMessage()");
+    LOGGER.warn("ASDF sendGlobalRtDivMessage()");
 
     // Snapshot the RT DIV (single broker URL) in preparation to be produced
     PartitionTracker vtDiv = consumerDiv.cloneVtProducerStates(partition); // includes latest consumed vt offset (LCVO)
@@ -3667,7 +3667,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             valueManifestContainer.getManifest(),
             null,
             false);
-    LOGGER.warn("asdf consumer brokerUrl {} KEY BYTES {}", brokerUrl, keyBytes);
+    // LOGGER.warn("asdf consumer brokerUrl {} KEY BYTES {}", brokerUrl, keyBytes);
 
     consumedBytesSinceLastSync.put(brokerUrl, 0L); // reset the timer for the next sync, since RT DIV was just synced
   }
