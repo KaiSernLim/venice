@@ -422,11 +422,11 @@ public class CreateVersion extends AbstractRoute {
         // Also allow allowList users to run this command
         if (!isAllowListUser(request)) {
           if (!hasWriteAccessToTopic(request)) {
-            return buildAclErrorResponse(request, response, true, false);
+            return buildAclErrorResponse(request, response, "write");
           }
 
           if (this.checkReadMethodForKafka && !hasReadAccessToTopic(request)) {
-            return buildAclErrorResponse(request, response, false, true);
+            return buildAclErrorResponse(request, response, "read");
           }
         }
 
@@ -457,22 +457,13 @@ public class CreateVersion extends AbstractRoute {
    * When partners have ACL issues for their push, we should provide an accurate and informative messages that
    * help partners to unblock by themselves.
    */
-  private String buildAclErrorResponse(
-      Request request,
-      Response response,
-      boolean missingWriteAccess,
-      boolean missingReadAccess) throws JsonProcessingException {
+  private String buildAclErrorResponse(Request request, Response response, String method)
+      throws JsonProcessingException {
     response.status(HttpStatus.SC_FORBIDDEN);
     VersionCreationResponse responseObject = new VersionCreationResponse();
     String userId = getPrincipalId(request);
-    String errorMessage = "Missing [%s] ACLs for user \"" + userId + "\". Please setup ACLs for your store.";
-    if (missingWriteAccess) {
-      errorMessage = String.format(errorMessage, "write");
-    }
-    if (missingReadAccess) {
-      errorMessage = String.format(errorMessage, "read");
-    }
-    responseObject.setError(errorMessage);
+    responseObject
+        .setError("Missing [" + method + "] ACLs for user \"" + userId + "\". Please setup ACLs for your store.");
     responseObject.setErrorType(ErrorType.BAD_REQUEST);
     return AdminSparkServer.OBJECT_MAPPER.writeValueAsString(responseObject);
   }

@@ -160,7 +160,7 @@ public class CreateVersionTest {
      */
     doReturn(false).when(accessClient).hasAccessToTopic(certificate, STORE_NAME, "Write");
     String responseBody = createVersionRoute.handle(request, response).toString();
-    assertTrue(responseBody.contains("Missing [write] ACLs"));
+    assertTrue(responseBody.contains("Missing [write] ACLs for user"));
 
     /**
      * Response should be 403 if user doesn't have "Write" method access
@@ -175,7 +175,7 @@ public class CreateVersionTest {
       doReturn(true).when(accessClient).hasAccessToTopic(certificate, STORE_NAME, "Write");
       doReturn(false).when(accessClient).hasAccessToTopic(certificate, STORE_NAME, "Read");
       responseBody = createVersionRoute.handle(request, response).toString();
-      assertTrue(responseBody.contains("Missing [read] ACLs"));
+      assertTrue(responseBody.contains("Missing [read] ACLs for user"));
       verify(response).status(org.apache.http.HttpStatus.SC_FORBIDDEN);
     }
   }
