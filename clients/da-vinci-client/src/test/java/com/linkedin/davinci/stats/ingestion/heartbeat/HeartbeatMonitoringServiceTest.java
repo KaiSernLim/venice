@@ -823,6 +823,112 @@ public class HeartbeatMonitoringServiceTest {
     }
   }
 
+  /**
+   * Regression test for the scenario where a SWAP_IN instance's in-flight ingestion lag monitor is
+   * incorrectly removed by the heartbeat monitoring service cleanup thread.
+   *
+   * When a node has the SWAP_IN instance operation, Helix emits:
+   *   "Participant X is not found with proper configuration information.
+   *    Skip recording partition assignment entry: Partition Y, Participant X, State STARTED."
+   * This causes the participant to be absent from the live instances snapshot used by
+   * {@link com.linkedin.venice.helix.HelixCustomizedViewOfflinePushRepository#onCustomizedViewDataChange},
+   * so the CV repo consistently reports this node has no assignment for the ingesting partition.
+   *
+   * As a result, after {@code lagMonitorCleanupCycle} cleanup cycles (~5 minutes), the lag monitor
+   * is removed even though the OFFLINE->STANDBY transition for that partition is still in progress.
+   */
+  @Test
+  public void testInFlightIngestionLagMonitorRemovedDueToSwapInCVMismatch() {
+    HybridStoreConfig hybridStoreConfig = new HybridStoreConfigImpl(1L, 1L, 1L, BufferReplayPolicy.REWIND_FROM_SOP);
+    // Non-AA version for simplicity: one heartbeat key per partition (local region only)
+    Version currentVersion = new VersionImpl(TEST_STORE, 1, "1");
+    currentVersion.setHybridStoreConfig(hybridStoreConfig);
+    currentVersion.setActiveActiveReplicationEnabled(false);
+
+    Store mockStore = mock(Store.class);
+    Mockito.when(mockStore.getName()).thenReturn(TEST_STORE);
+    Mockito.when(mockStore.getCurrentVersion()).thenReturn(1);
+    Mockito.when(mockStore.getVersion(1)).thenReturn(currentVersion);
+
+    MetricsRepository mockMetricsRepository = new MetricsRepository();
+    ReadOnlyStoreRepository mockReadOnlyRepository = mock(ReadOnlyStoreRepository.class);
+    Mockito.when(mockReadOnlyRepository.getStoreOrThrow(TEST_STORE)).thenReturn(mockStore);
+    doReturn(new StoreVersionInfo(mockStore, currentVersion)).when(mockReadOnlyRepository)
+        .waitVersion(eq(TEST_STORE), eq(1), any(), anyLong());
+
+    String hostname = "localhost";
+    int port = 123;
+    String versionTopic = Version.composeKafkaTopic(TEST_STORE, 1);
+
+    // CV consistently shows this node is NOT assigned to any partition.
+    // This reproduces what happens when a SWAP_IN instance is filtered from Helix live instances
+    // during onCustomizedViewDataChange: the participant appears in the CV state map with State
+    // STARTED but is absent from the live instances snapshot, so it is never included in the
+    // PartitionAssignment cached by HelixCustomizedViewOfflinePushRepository.
+    Instance otherInstance = Instance.fromNodeId("otherHost_456");
+    Partition mockPartitionWithoutThisNode = mock(Partition.class);
+    doReturn(Collections.singleton(otherInstance)).when(mockPartitionWithoutThisNode).getAllInstancesSet();
+    PartitionAssignment mockPartitionAssignment = mock(PartitionAssignment.class);
+    doReturn(mockPartitionWithoutThisNode).when(mockPartitionAssignment).getPartition(anyInt());
+    HelixCustomizedViewOfflinePushRepository mockCVRepo = mock(HelixCustomizedViewOfflinePushRepository.class);
+    doReturn(mockPartitionAssignment).when(mockCVRepo).getPartitionAssignments(versionTopic);
+
+    Set<String> regions = new HashSet<>();
+    regions.add(LOCAL_FABRIC);
+    VeniceServerConfig serverConfig = mock(VeniceServerConfig.class);
+    doReturn(regions).when(serverConfig).getRegionNames();
+    doReturn(LOCAL_FABRIC).when(serverConfig).getRegionName();
+    doReturn(Duration.ofSeconds(5)).when(serverConfig).getServerMaxWaitForVersionInfo();
+    doReturn(hostname).when(serverConfig).getListenerHostname();
+    doReturn(port).when(serverConfig).getListenerPort();
+    int cleanupCycle = 5;
+    doReturn(cleanupCycle).when(serverConfig).getLagMonitorCleanupCycle();
+
+    CompletableFuture<HelixCustomizedViewOfflinePushRepository> cvRepoFuture = new CompletableFuture<>();
+    HeartbeatMonitoringService heartbeatMonitoringService =
+        new HeartbeatMonitoringService(mockMetricsRepository, mockReadOnlyRepository, serverConfig, null, cvRepoFuture);
+
+    // Simulate OFFLINE->STANDBY starting for partition 0: ingestion is in-flight
+    heartbeatMonitoringService.updateLagMonitor(versionTopic, 0, HeartbeatLagMonitorAction.SET_LEADER_MONITOR);
+    Assert.assertEquals(
+        countPartitions(heartbeatMonitoringService.getLeaderHeartbeatTimeStamps(), TEST_STORE, 1),
+        1,
+        "Leader lag monitor should be present for in-flight partition 0");
+
+    // CV repo becomes available but consistently reports this node is absent from the partition
+    // assignment, because the SWAP_IN instance is filtered from Helix live instances.
+    cvRepoFuture.complete(mockCVRepo);
+
+    // Each cleanup cycle increments the lingering counter but has not yet removed the monitor
+    String replicaId = Utils.getReplicaId(versionTopic, 0);
+    for (int cycle = 1; cycle < cleanupCycle; cycle++) {
+      heartbeatMonitoringService.checkAndMaybeCleanupLagMonitor();
+      Assert.assertEquals(
+          heartbeatMonitoringService.getCleanupHeartbeatMap().get(replicaId).intValue(),
+          cycle,
+          "Cleanup counter should be " + cycle + " after cycle " + cycle);
+      Assert.assertEquals(
+          countPartitions(heartbeatMonitoringService.getLeaderHeartbeatTimeStamps(), TEST_STORE, 1),
+          1,
+          "Lag monitor should still be present before reaching cleanup threshold");
+    }
+
+    // On the final cleanup cycle the lag monitor is removed, even though the OFFLINE->STANDBY
+    // transition for partition 0 is still in-flight. This is the bug: the SWAP_IN instance is
+    // absent from the CV live instances snapshot, so the cleanup thread treats the replica as
+    // lingering and removes its lag monitor after lagMonitorCleanupCycle iterations.
+    heartbeatMonitoringService.checkAndMaybeCleanupLagMonitor();
+    Assert.assertEquals(
+        countPartitions(heartbeatMonitoringService.getLeaderHeartbeatTimeStamps(), TEST_STORE, 1),
+        0,
+        "Lag monitor was removed after " + cleanupCycle + " cleanup cycles because the SWAP_IN "
+            + "instance was absent from the CV live instances snapshot, even though ingestion for "
+            + "partition 0 was still in-flight");
+    Assert.assertNull(
+        heartbeatMonitoringService.getCleanupHeartbeatMap().get(replicaId),
+        "Cleanup map entry should be cleared after removal");
+  }
+
   @Test
   public void testLargestHeartbeatLag() {
     HeartbeatMonitoringService heartbeatMonitoringService = mock(HeartbeatMonitoringService.class);
