@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.helix.HelixAdmin;
 import org.apache.helix.HelixManagerFactory;
 import org.apache.helix.InstanceType;
+import org.apache.helix.constants.InstanceConstants;
 import org.apache.helix.controller.HelixControllerMain;
 import org.apache.helix.manager.zk.ZKHelixAdmin;
 import org.apache.helix.manager.zk.ZKHelixManager;
@@ -350,6 +351,89 @@ public class TestHelixCustomizedViewOfflinePushRepository {
     Assert.assertEquals(
         0,
         customizedPartitionAssignment.getPartition(partitionId0).getInstancesInState(ExecutionStatus.COMPLETED).size());
+  }
+
+  /**
+   * Functional regression test for VENG-12500.
+   *
+   * <p>Hypothesis: when a Venice server's Helix instance operation is set to an unroutable value
+   * (e.g., {@code SWAP_IN} or {@code UNKNOWN}), Helix's {@code RoutingDataCache} filters it out of
+   * {@code getRoutableInstanceConfigMap()}, which causes {@code CustomizedViewRoutingTable} to omit
+   * that instance from its {@code instanceConfigMap}. As a result,
+   * {@link HelixCustomizedViewOfflinePushRepository#onCustomizedViewDataChange} cannot match the CV
+   * entry to a live instance and silently drops it from the cached {@link PartitionAssignment}.
+   *
+   * <p>This test uses {@code UNKNOWN} as a proxy for {@code SWAP_IN} because:
+   * <ul>
+   *   <li>Both are members of {@code InstanceConstants.UNROUTABLE_INSTANCE_OPERATIONS} and
+   *       exercise the identical filtering code path in {@code RoutingDataCache}.</li>
+   *   <li>The transition {@code ENABLE -> UNKNOWN} is always permitted by Helix, whereas
+   *       {@code ENABLE -> SWAP_IN} is not a valid transition (SWAP_IN requires a prior
+   *       {@code UNKNOWN} state and a matching ENABLE peer instance with the same logical ID).</li>
+   * </ul>
+   *
+   * <ul>
+   *   <li>If the assertion in step 6 passes -> unroutable-operation filtering is confirmed as the
+   *       root cause of the CV mismatch.</li>
+   *   <li>If the assertion fails (manager0 remains visible) -> the filtering is not the mechanism;
+   *       the root cause lies elsewhere (e.g., ZK watcher ordering or
+   *       {@code handleStoreChanged} prematurely purging {@code resourceToPartitionCountMap}).</li>
+   * </ul>
+   */
+  @Test
+  public void testSwapInInstanceAbsentFromCVPartitionAssignment() throws Exception {
+    // Step 1: Baseline - manager0 must be visible for partitionId0 before any operation change.
+    // BeforeMethod already waited for 2 replicas on partitionId0 (COMPLETED for manager0,
+    // END_OF_PUSH_RECEIVED for manager1).
+    PartitionAssignment pa = offlinePushOnlyRepository.getPartitionAssignments(resourceName);
+    boolean initiallyVisible = pa.getPartition(partitionId0)
+        .getAllInstancesSet()
+        .stream()
+        .anyMatch(i -> i.getNodeId().equals(manager0.getInstanceName()));
+    Assert.assertTrue(initiallyVisible, "manager0 should initially be visible in partitionId0");
+
+    // Step 2: Write STARTED state for manager0 on partitionId0 to represent an in-flight ingestion
+    // (OFFLINE->STANDBY transition), matching the state seen in production logs.
+    accessor0.updateReplicaStatus(resourceName, partitionId0, ExecutionStatus.STARTED);
+
+    // Step 3: Wait for STARTED state to propagate to the repository before setting UNKNOWN.
+    TestUtils.waitForNonDeterministicAssertion(10, TimeUnit.SECONDS, () -> {
+      List<ReplicaState> states = offlinePushOnlyRepository.getReplicaStates(resourceName, partitionId0);
+      boolean startedVisible = states.stream()
+          .anyMatch(
+              s -> s.getParticipantId().equals(manager0.getInstanceName())
+                  && s.getVenicePushStatus().equals(ExecutionStatus.STARTED));
+      Assert.assertTrue(startedVisible, "STARTED state for manager0 should be visible in partitionId0");
+    });
+
+    // Step 4: Set UNKNOWN instance operation on manager0. UNKNOWN (like SWAP_IN) is a member of
+    // InstanceConstants.UNROUTABLE_INSTANCE_OPERATIONS, which RoutingDataCache uses to exclude
+    // instances from getRoutableInstanceConfigMap(). This mirrors the production configuration
+    // that caused Helix to emit: "Participant X is not found with proper configuration information.
+    // Skip recording partition assignment entry: Partition Y, Participant X, State STARTED."
+    // Note: ENABLE -> UNKNOWN is an always-permitted transition; ENABLE -> SWAP_IN is not valid
+    // without additional topology/logical-ID prerequisites that are out of scope here.
+    admin.setInstanceOperation(clusterName, manager0.getInstanceName(), InstanceConstants.InstanceOperation.UNKNOWN);
+
+    // Step 5: Trigger a new onCustomizedViewDataChange callback so Helix rebuilds its
+    // routable-instance snapshot. Because UNKNOWN is in UNROUTABLE_INSTANCE_OPERATIONS,
+    // the next routing-table event will drop manager0 from the cached PartitionAssignment.
+    accessor1.updateReplicaStatus(resourceName, partitionId0, ExecutionStatus.COMPLETED);
+
+    // Step 6: Assert manager0 is absent from partitionId0 in the CV repo after UNKNOWN is set.
+    // A passing assertion confirms that unroutable-operation filtering by RoutingDataCache is the
+    // root cause of the CV mismatch described in VENG-12500.
+    TestUtils.waitForNonDeterministicAssertion(10, TimeUnit.SECONDS, () -> {
+      PartitionAssignment assignment = offlinePushOnlyRepository.getPartitionAssignments(resourceName);
+      boolean visible = assignment.getPartition(partitionId0)
+          .getAllInstancesSet()
+          .stream()
+          .anyMatch(i -> i.getNodeId().equals(manager0.getInstanceName()));
+      Assert.assertFalse(
+          visible,
+          "Instance with UNKNOWN operation (proxy for SWAP_IN) should be absent from CV repo "
+              + "partition assignment because RoutingDataCache filters it from the routable " + "instance config map");
+    });
   }
 
   @Test
