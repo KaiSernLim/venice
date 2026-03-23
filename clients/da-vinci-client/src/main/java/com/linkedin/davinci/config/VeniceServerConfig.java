@@ -116,7 +116,6 @@ import static com.linkedin.venice.ConfigKeys.SERVER_DISK_HEALTH_CHECK_TIMEOUT_IN
 import static com.linkedin.venice.ConfigKeys.SERVER_ENABLE_LIVE_CONFIG_BASED_KAFKA_THROTTLING;
 import static com.linkedin.venice.ConfigKeys.SERVER_ENABLE_PARALLEL_BATCH_GET;
 import static com.linkedin.venice.ConfigKeys.SERVER_FORKED_PROCESS_JVM_ARGUMENT_LIST;
-import static com.linkedin.venice.ConfigKeys.SERVER_GLOBAL_RT_DIV_ENABLED;
 import static com.linkedin.venice.ConfigKeys.SERVER_HELIX_JOIN_AS_UNKNOWN;
 import static com.linkedin.venice.ConfigKeys.SERVER_HTTP2_HEADER_TABLE_SIZE;
 import static com.linkedin.venice.ConfigKeys.SERVER_HTTP2_INBOUND_ENABLED;
@@ -666,7 +665,6 @@ public class VeniceServerConfig extends VeniceClusterConfig {
   private final boolean crossTpParallelProcessingEnabled;
   private final int crossTpParallelProcessingThreadPoolSize;
   private final boolean crossTpParallelProcessingCurrentVersionAAWCLeaderOnly;
-  private final boolean isGlobalRtDivEnabled;
   private final boolean nearlineWorkloadProducerThroughputOptimizationEnabled;
   private final int zstdDictCompressionLevel;
   private final boolean deleteUnassignedPartitionsOnStartup;
@@ -1146,7 +1144,6 @@ public class VeniceServerConfig extends VeniceClusterConfig {
     channelOptionWriteBufferHighBytes = (int) serverProperties
         .getSizeInBytes(SERVER_CHANNEL_OPTION_WRITE_BUFFER_WATERMARK_HIGH_BYTES, WriteBufferWaterMark.DEFAULT.high());
 
-    this.isGlobalRtDivEnabled = serverProperties.getBoolean(SERVER_GLOBAL_RT_DIV_ENABLED, false);
     if (channelOptionWriteBufferHighBytes <= 0) {
       throw new VeniceException("Invalid channel option write buffer high bytes: " + channelOptionWriteBufferHighBytes);
     }
@@ -2076,10 +2073,6 @@ public class VeniceServerConfig extends VeniceClusterConfig {
 
   public boolean isCrossTpParallelProcessingCurrentVersionAAWCLeaderOnly() {
     return crossTpParallelProcessingCurrentVersionAAWCLeaderOnly;
-  }
-
-  public boolean isGlobalRtDivEnabled() {
-    return isGlobalRtDivEnabled;
   }
 
   public boolean isNearlineWorkloadProducerThroughputOptimizationEnabled() {

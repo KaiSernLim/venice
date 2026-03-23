@@ -6158,6 +6158,33 @@ public abstract class StoreIngestionTaskTest {
   }
 
   /**
+   * Verifies that {@link StoreIngestionTask#shouldSendGlobalRtDiv} always returns false for control messages,
+   * even when Global RT DIV is enabled and the byte threshold is exceeded.
+   */
+  @Test
+  public void testShouldSendGlobalRtDivExcludesControlMessages() {
+    String brokerUrl = "localhost:1234";
+    StoreIngestionTask storeIngestionTask = mock(StoreIngestionTask.class);
+    doCallRealMethod().when(storeIngestionTask).shouldSendGlobalRtDiv(any(), any(), any());
+    doReturn(true).when(storeIngestionTask).isGlobalRtDivEnabled();
+    doReturn(1L).when(storeIngestionTask).getSyncBytesInterval(any());
+
+    DefaultPubSubMessage controlMsg = mock(DefaultPubSubMessage.class);
+    KafkaKey controlKey = mock(KafkaKey.class);
+    doReturn(true).when(controlKey).isControlMessage();
+    doReturn(controlKey).when(controlMsg).getKey();
+
+    PartitionConsumptionState pcs = mock(PartitionConsumptionState.class);
+    VeniceConcurrentHashMap<String, Long> consumedBytesMap = new VeniceConcurrentHashMap<>();
+    consumedBytesMap.put(brokerUrl, 100L); // above threshold
+    doReturn(consumedBytesMap).when(storeIngestionTask).getConsumedBytesSinceLastSync();
+
+    assertFalse(
+        storeIngestionTask.shouldSendGlobalRtDiv(controlMsg, pcs, brokerUrl),
+        "Control messages should never trigger a Global RT DIV send");
+  }
+
+  /**
    * Verifies that {@link StoreIngestionTask#produceToStoreBufferServiceOrKafka} populates
    * {@link StoreIngestionTask#consumedBytesSinceLastSync} only for the local VT (keyed by VT name)
    * and RT topics (keyed by broker URL). Remote VTs must be excluded from the map entirely.
@@ -6240,6 +6267,73 @@ public abstract class StoreIngestionTaskTest {
 
     // Verify that we never tried to use the null PCS to sync
     verify(vtDivSnapshot, never()).updateOffsetRecord(any(), any());
+  }
+
+  /**
+   * Verifies that {@link StoreIngestionTask#getDataIntegrityValidator()} returns the consumerDiv when
+   * Global RT DIV is enabled, and the drainerDiv (a different object) when disabled.
+   */
+  @Test(dataProvider = "True-and-False", dataProviderClass = DataProviderUtils.class)
+  public void testGetDataIntegrityValidatorSwitching(boolean globalRtDivEnabled) {
+    doReturn(new ReferenceCounted<>(new DeepCopyStorageEngine(this.mockAbstractStorageEngine), se -> {}))
+        .when(this.mockStorageService)
+        .getRefCountedStorageEngine(anyString());
+    StoreIngestionTaskFactory.Builder builder = mock(StoreIngestionTaskFactory.Builder.class);
+    VeniceServerConfig veniceServerConfig = mock(VeniceServerConfig.class);
+    doReturn(VeniceProperties.empty()).when(veniceServerConfig).getClusterProperties();
+    doReturn(VeniceProperties.empty()).when(veniceServerConfig).getKafkaConsumerConfigsForLocalConsumption();
+    doReturn(VeniceProperties.empty()).when(veniceServerConfig).getKafkaConsumerConfigsForRemoteConsumption();
+    doReturn(Object2IntMaps.emptyMap()).when(veniceServerConfig).getKafkaClusterUrlToIdMap();
+    doReturn(-1).when(veniceServerConfig).getIdleIngestionTaskCleanupIntervalInSeconds();
+    doReturn(veniceServerConfig).when(builder).getServerConfig();
+    doReturn(mock(ReadOnlyStoreRepository.class)).when(builder).getMetadataRepo();
+    doReturn(mock(ReadOnlySchemaRepository.class)).when(builder).getSchemaRepo();
+    doReturn(mock(AggKafkaConsumerService.class)).when(builder).getAggKafkaConsumerService();
+    doReturn(mockAggStoreIngestionStats).when(builder).getIngestionStats();
+    doReturn(pubSubContext).when(builder).getPubSubContext();
+
+    Version version = mock(Version.class);
+    doReturn(1).when(version).getPartitionCount();
+    doReturn(null).when(version).getPartitionerConfig();
+    doReturn(VersionStatus.ONLINE).when(version).getStatus();
+    doReturn(true).when(version).isNativeReplicationEnabled();
+    doReturn("localhost").when(version).getPushStreamSourceAddress();
+    doReturn(globalRtDivEnabled).when(version).isGlobalRtDivEnabled();
+
+    Store store = mock(Store.class);
+    doReturn(version).when(store).getVersion(eq(1));
+    doReturn(Version.parseStoreFromVersionTopic("testStore_v1")).when(store).getName();
+
+    VeniceStoreVersionConfig storeConfig = mock(VeniceStoreVersionConfig.class);
+    doReturn("testStore_v1").when(storeConfig).getStoreVersionName();
+
+    LeaderFollowerStoreIngestionTask ingestionTask = spy(
+        new LeaderFollowerStoreIngestionTask(
+            this.mockStorageService,
+            builder,
+            store,
+            version,
+            mock(Properties.class),
+            mock(BooleanSupplier.class),
+            storeConfig,
+            -1,
+            Optional.empty(),
+            null,
+            null));
+
+    DataIntegrityValidator div = ingestionTask.getDataIntegrityValidator();
+    DataIntegrityValidator consumerDiv = ingestionTask.getConsumerDiv();
+    if (globalRtDivEnabled) {
+      Assert.assertSame(
+          div,
+          consumerDiv,
+          "When Global RT DIV is enabled, getDataIntegrityValidator() must be consumerDiv");
+    } else {
+      Assert.assertNotSame(
+          div,
+          consumerDiv,
+          "When Global RT DIV is disabled, getDataIntegrityValidator() must be drainerDiv (not consumerDiv)");
+    }
   }
 
   /**

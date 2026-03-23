@@ -8,8 +8,6 @@ import static com.linkedin.venice.ConfigKeys.SERVER_CONSUMER_POOL_SIZE_PER_KAFKA
 import static com.linkedin.venice.ConfigKeys.SERVER_DATABASE_SYNC_BYTES_INTERNAL_FOR_TRANSACTIONAL_MODE;
 import static com.linkedin.venice.ConfigKeys.SERVER_PROMOTION_TO_LEADER_REPLICA_DELAY_SECONDS;
 import static com.linkedin.venice.ConfigKeys.SERVER_SHARED_CONSUMER_ASSIGNMENT_STRATEGY;
-import static com.linkedin.venice.integration.utils.VeniceClusterWrapper.DEFAULT_KEY_SCHEMA;
-import static com.linkedin.venice.integration.utils.VeniceClusterWrapper.DEFAULT_VALUE_SCHEMA;
 import static com.linkedin.venice.utils.IntegrationTestPushUtils.createStoreForJob;
 import static com.linkedin.venice.utils.IntegrationTestPushUtils.defaultVPJProps;
 import static com.linkedin.venice.utils.IntegrationTestPushUtils.runVPJ;
@@ -71,14 +69,10 @@ import com.linkedin.venice.writer.VeniceWriterFactory;
 import com.linkedin.venice.writer.VeniceWriterOptions;
 import java.io.File;
 import java.nio.ByteBuffer;
-import java.util.AbstractMap;
 import java.util.Collections;
-import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
 import org.apache.avro.Schema;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -390,45 +384,6 @@ public class TestGlobalRtDiv {
     return extraProperties;
   }
 
-  /**
-   * This test verifies functionality of sending chunked/non-chunked div messages:
-   *
-   * 1. Create a hybrid store and create a store version.
-   * 2. Send a non-chunked div message to the version topic.
-   * 3. Send a chunked div message to the version topic.
-   * 4. Verify the messages are sent successfully.
-   * 5. TODO: Add more verification steps on the server side later.
-   */
-  @Test(timeOut = 180 * Time.MS_PER_SECOND)
-  public void testChunkedDiv() {
-    String storeName = Utils.getUniqueString("store");
-    final int partitionCount = 1;
-    final int keyCount = 10;
-
-    UpdateStoreQueryParams params = new UpdateStoreQueryParams()
-        // set hybridRewindSecond to a big number so following versions won't ignore old records in RT
-        .setHybridRewindSeconds(2000000)
-        .setHybridOffsetLagThreshold(10)
-        .setPartitionCount(partitionCount);
-
-    venice.useControllerClient(client -> {
-      client.createNewStore(storeName, "owner", DEFAULT_KEY_SCHEMA, DEFAULT_VALUE_SCHEMA);
-      client.updateStore(storeName, params);
-    });
-
-    // Create store version 1 by writing keyCount records.
-    Stream<Map.Entry> batchData = IntStream.range(0, keyCount).mapToObj(i -> new AbstractMap.SimpleEntry<>(i, i));
-    venice.createVersion(storeName, DEFAULT_KEY_SCHEMA, DEFAULT_VALUE_SCHEMA, batchData);
-
-    Properties writerProperties = new Properties();
-    writerProperties.put(KAFKA_BOOTSTRAP_SERVERS, venice.getPubSubBrokerWrapper().getAddress());
-
-    // Set max segment elapsed time to 0 to enforce creating small segments aggressively
-    writerProperties.put(VeniceWriter.MAX_ELAPSED_TIME_FOR_SEGMENT_IN_MS, "0");
-    writerProperties.putAll(
-        PubSubBrokerWrapper.getBrokerDetailsForClients(Collections.singletonList(venice.getPubSubBrokerWrapper())));
-  }
-
   @Test(timeOut = 180 * Time.MS_PER_SECOND)
   public void testGlobalRtDiv() throws Exception {
     int PARTITION = 0;
@@ -550,23 +505,23 @@ public class TestGlobalRtDiv {
   Instance verifyGlobalDivStateOnAllServers(String topicName, int partition) {
     // Verify that the other server is promoted to leader and load the Global RT DIV State correctly.
     HelixExternalViewRepository routingDataRepo = getRoutingDataRepository();
-    AtomicReference<Instance> LeaderNode = new AtomicReference<>();
+    AtomicReference<Instance> leaderNode = new AtomicReference<>();
     TestUtils.waitForNonDeterministicAssertion(60, TimeUnit.SECONDS, true, true, () -> {
-      LeaderNode.set(routingDataRepo.getLeaderInstance(topicName, partition)); // Find the leader node
-      LOGGER.info("Leader server: {}", LeaderNode.get().getNodeId());
+      leaderNode.set(routingDataRepo.getLeaderInstance(topicName, partition)); // Find the leader node
+      LOGGER.info("Leader server: {}", leaderNode.get().getNodeId());
       venice.getVeniceServers().forEach(server -> {
-        if (LeaderNode.get() == null) {
+        if (leaderNode.get() == null) {
           throw new VeniceException("Leader not found yet");
         }
         if (!server.isRunning()) {
           LOGGER.info("Server: {} is not running", server.getVeniceServer());
           return;
         }
-        boolean isLeader = server.getPort() == LeaderNode.get().getPort();
+        boolean isLeader = server.getPort() == leaderNode.get().getPort();
         verifyGlobalDivState(server, topicName, partition, isLeader);
       });
     });
-    return LeaderNode.get();
+    return leaderNode.get();
   }
 
   private void verifyGlobalDivState(VeniceServerWrapper server, String topicName, int partition, boolean isLeader) {

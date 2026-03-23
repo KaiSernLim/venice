@@ -1610,11 +1610,10 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               elapsedTimeForPuttingIntoQueue);
           totalBytesRead += recordSize;
 
-          // Track consumed bytes for Global RT DIV (matches the non-batch path)
-          PubSubTopic topic = topicPartition.getPubSubTopic();
-          if (isGlobalRtDivEnabled() && (versionTopic.equals(topic) || topic.isRealTime())) {
-            String consumedBytesKey = versionTopic.equals(topic) ? versionTopic.getName() : kafkaUrl;
-            consumedBytesSinceLastSync.compute(consumedBytesKey, (k, v) -> (v == null) ? recordSize : v + recordSize);
+          // Track consumed RT bytes for Global RT DIV. The batch path only handles RT messages
+          // (guarded by isAllMessagesFromRTTopic), so only the RT broker URL key applies here.
+          if (isGlobalRtDivEnabled()) {
+            consumedBytesSinceLastSync.compute(kafkaUrl, (k, v) -> (v == null) ? recordSize : v + recordSize);
           }
 
           // Only track keys that were actually produced (not ignored by DCR).
