@@ -41,6 +41,7 @@ import com.linkedin.venice.compression.NoopCompressor;
 import com.linkedin.venice.controllerapi.ControllerClient;
 import com.linkedin.venice.controllerapi.ControllerResponse;
 import com.linkedin.venice.controllerapi.UpdateStoreQueryParams;
+import com.linkedin.venice.controllerapi.VersionResponse;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.helix.HelixExternalViewRepository;
 import com.linkedin.venice.integration.utils.PubSubBrokerWrapper;
@@ -986,6 +987,200 @@ public class TestGlobalRtDiv {
     }
   }
 
-  // test VPJ then restart and then expected failure without code
-  // look at test history chunking test
+  /**
+   * Tests disaster recovery by rolling back from a version that has Global RT DIV enabled
+   * to a prior version that does not have Global RT DIV enabled.
+   *
+   * Scenario:
+   * 1. Create a hybrid store WITHOUT Global RT DIV. Push v1 (batch). Write RT data.
+   * 2. Enable Global RT DIV. Push v2 (batch). Write RT data with Global RT DIV active.
+   * 3. Roll back to v1 (no Global RT DIV) using overrideSetActiveVersion.
+   * 4. Verify: v1 data is served correctly, servers don't crash, RT data continues to flow.
+   */
+  @Test(timeOut = 180 * Time.MS_PER_SECOND)
+  public void testRollbackFromGlobalRtDivVersion() throws Exception {
+    String storeName = Utils.getUniqueString("testRollbackGlobalRtDiv");
+    int partitionCount = 1;
+    int batchRecordCount = 100;
+    String V1_RT_PREFIX = "v1_rt_";
+    String V2_RT_PREFIX = "v2_rt_";
+    String POST_ROLLBACK_RT_PREFIX = "post_rollback_rt_";
+
+    File inputDir = getTempDataDirectory();
+    String inputDirPath = "file://" + inputDir.getAbsolutePath();
+    Schema recordSchema = TestWriteUtils.writeSimpleAvroFileWithStringToStringSchema(inputDir);
+    Properties vpjProperties = defaultVPJProps(venice, inputDirPath, storeName);
+
+    PubSubBrokerWrapper brokerWrapper = venice.getPubSubBrokerWrapper();
+    Properties writerProperties = new Properties();
+    writerProperties.put(KAFKA_BOOTSTRAP_SERVERS, brokerWrapper.getAddress());
+    writerProperties.putAll(PubSubBrokerWrapper.getBrokerDetailsForClients(Collections.singletonList(brokerWrapper)));
+    PubSubProducerAdapterFactory producerFactory = brokerWrapper.getPubSubClientsFactory().getProducerAdapterFactory();
+    VeniceWriterFactory writerFactory = TestUtils
+        .getVeniceWriterFactory(writerProperties, producerFactory, brokerWrapper.getPubSubPositionTypeRegistry());
+
+    try (ControllerClient controllerClient = createStoreForJob(venice.getClusterName(), recordSchema, vpjProperties);
+        AvroGenericStoreClient<Object, Object> client = ClientFactory.getAndStartGenericAvroClient(
+            ClientConfig.defaultGenericClientConfig(storeName).setVeniceURL(venice.getRandomRouterURL()))) {
+
+      // Step 1: Setup hybrid store WITHOUT Global RT DIV, push v1
+      UpdateStoreQueryParams v1Params = new UpdateStoreQueryParams().setHybridRewindSeconds(10L)
+          .setHybridOffsetLagThreshold(2L)
+          .setCompressionStrategy(CompressionStrategy.NO_OP)
+          .setPartitionCount(partitionCount)
+          .setGlobalRtDivEnabled(false);
+      ControllerResponse response = controllerClient.updateStore(storeName, v1Params);
+      assertFalse(response.isError(), "Updating store for v1 should succeed: " + response.getError());
+
+      runVPJ(vpjProperties, 1, controllerClient);
+      verifyAllDataCanBeQueried(client, 1, batchRecordCount, VALUE_PREFIX);
+      LOGGER.info("V1 batch data verified");
+
+      // Write RT data to v1
+      StoreInfo storeInfo = TestUtils.assertCommand(controllerClient.getStore(storeName)).getStore();
+      String rtTopicName = Utils.getRealTimeTopicName(storeInfo);
+      writeRTData(rtTopicName, 101, 120, V1_RT_PREFIX, writerFactory);
+      verifyAllDataCanBeQueried(client, 101, 120, V1_RT_PREFIX);
+      LOGGER.info("V1 RT data verified");
+
+      // Step 2: Enable Global RT DIV, push v2
+      UpdateStoreQueryParams v2Params = new UpdateStoreQueryParams().setGlobalRtDivEnabled(true);
+      response = controllerClient.updateStore(storeName, v2Params);
+      assertFalse(response.isError(), "Enabling Global RT DIV should succeed: " + response.getError());
+
+      // Re-use same input dir for v2 batch push
+      runVPJ(vpjProperties, 2, controllerClient);
+      verifyAllDataCanBeQueried(client, 1, batchRecordCount, VALUE_PREFIX);
+      LOGGER.info("V2 batch data verified");
+
+      // Write RT data with Global RT DIV active
+      writeRTData(rtTopicName, 121, 140, V2_RT_PREFIX, writerFactory);
+      verifyAllDataCanBeQueried(client, 121, 140, V2_RT_PREFIX);
+      LOGGER.info("V2 RT data (with Global RT DIV) verified");
+
+      // Step 3: Roll back to v1 (disable Global RT DIV first, then set active version)
+      UpdateStoreQueryParams rollbackParams = new UpdateStoreQueryParams().setGlobalRtDivEnabled(false);
+      response = controllerClient.updateStore(storeName, rollbackParams);
+      assertFalse(response.isError(), "Disabling Global RT DIV should succeed: " + response.getError());
+
+      VersionResponse versionResponse = controllerClient.overrideSetActiveVersion(storeName, 1);
+      assertFalse(versionResponse.isError(), "Rolling back to v1 should succeed: " + versionResponse.getError());
+
+      // Wait for the current version to become 1
+      TestUtils.waitForNonDeterministicCompletion(60, TimeUnit.SECONDS, () -> {
+        int currentVersion = controllerClient.getStore(storeName).getStore().getCurrentVersion();
+        return currentVersion == 1;
+      });
+
+      // Step 4: Verify v1 data is served correctly after rollback
+      verifyAllDataCanBeQueried(client, 1, batchRecordCount, VALUE_PREFIX);
+      LOGGER.info("V1 batch data verified after rollback");
+
+      // Verify servers are healthy: write new RT data after rollback (without Global RT DIV)
+      writeRTData(rtTopicName, 141, 160, POST_ROLLBACK_RT_PREFIX, writerFactory);
+      verifyAllDataCanBeQueried(client, 141, 160, POST_ROLLBACK_RT_PREFIX);
+      LOGGER.info("Post-rollback RT data verified — servers are healthy after rollback");
+
+      // Verify all servers are still running (no crashes)
+      venice.getVeniceServers().forEach(server -> {
+        assertTrue(server.isRunning(), "Server " + server.getAddress() + " should still be running after rollback");
+      });
+    }
+  }
+
+  /**
+   * Tests disaster recovery by disabling Global RT DIV and performing a re-push (Kafka input batch job).
+   *
+   * Scenario:
+   * 1. Create a hybrid store with Global RT DIV enabled. Push v1. Write RT data.
+   * 2. Disable Global RT DIV on the store.
+   * 3. Re-push v2 from Kafka (SOURCE_KAFKA), which creates a new version without Global RT DIV.
+   * 4. Verify: all batch data from v1 is carried over, servers are healthy, RT data continues.
+   */
+  @Test(timeOut = 180 * Time.MS_PER_SECOND)
+  public void testRepushAfterDisablingGlobalRtDiv() throws Exception {
+    String storeName = Utils.getUniqueString("testRepushDisableGlobalRtDiv");
+    int partitionCount = 1;
+    int batchRecordCount = 100;
+    String V1_RT_PREFIX = "v1_rt_";
+    String POST_REPUSH_RT_PREFIX = "post_repush_rt_";
+
+    File inputDir = getTempDataDirectory();
+    String inputDirPath = "file://" + inputDir.getAbsolutePath();
+    Schema recordSchema = TestWriteUtils.writeSimpleAvroFileWithStringToStringSchema(inputDir);
+    Properties vpjProperties = defaultVPJProps(venice, inputDirPath, storeName);
+
+    PubSubBrokerWrapper brokerWrapper = venice.getPubSubBrokerWrapper();
+    Properties writerProperties = new Properties();
+    writerProperties.put(KAFKA_BOOTSTRAP_SERVERS, brokerWrapper.getAddress());
+    writerProperties.putAll(PubSubBrokerWrapper.getBrokerDetailsForClients(Collections.singletonList(brokerWrapper)));
+    PubSubProducerAdapterFactory producerFactory = brokerWrapper.getPubSubClientsFactory().getProducerAdapterFactory();
+    VeniceWriterFactory writerFactory = TestUtils
+        .getVeniceWriterFactory(writerProperties, producerFactory, brokerWrapper.getPubSubPositionTypeRegistry());
+
+    try (ControllerClient controllerClient = createStoreForJob(venice.getClusterName(), recordSchema, vpjProperties);
+        AvroGenericStoreClient<Object, Object> client = ClientFactory.getAndStartGenericAvroClient(
+            ClientConfig.defaultGenericClientConfig(storeName).setVeniceURL(venice.getRandomRouterURL()))) {
+
+      // Step 1: Create hybrid store WITH Global RT DIV, push v1
+      UpdateStoreQueryParams v1Params = new UpdateStoreQueryParams().setGlobalRtDivEnabled(true)
+          .setHybridRewindSeconds(10L)
+          .setHybridOffsetLagThreshold(2L)
+          .setCompressionStrategy(CompressionStrategy.NO_OP)
+          .setPartitionCount(partitionCount);
+      ControllerResponse response = controllerClient.updateStore(storeName, v1Params);
+      assertFalse(response.isError(), "Updating store for v1 should succeed: " + response.getError());
+
+      runVPJ(vpjProperties, 1, controllerClient);
+      verifyAllDataCanBeQueried(client, 1, batchRecordCount, VALUE_PREFIX);
+      LOGGER.info("V1 batch data verified");
+
+      // Write RT data with Global RT DIV active
+      StoreInfo storeInfo = TestUtils.assertCommand(controllerClient.getStore(storeName)).getStore();
+      String rtTopicName = Utils.getRealTimeTopicName(storeInfo);
+      writeRTData(rtTopicName, 101, 130, V1_RT_PREFIX, writerFactory);
+      verifyAllDataCanBeQueried(client, 101, 130, V1_RT_PREFIX);
+      LOGGER.info("V1 RT data (with Global RT DIV) verified");
+
+      // Step 2: Disable Global RT DIV
+      UpdateStoreQueryParams disableParams = new UpdateStoreQueryParams().setGlobalRtDivEnabled(false);
+      response = controllerClient.updateStore(storeName, disableParams);
+      assertFalse(response.isError(), "Disabling Global RT DIV should succeed: " + response.getError());
+
+      // Step 3: Re-push from Kafka (SOURCE_KAFKA) to create v2 without Global RT DIV
+      Properties repushProps = defaultVPJProps(venice, inputDirPath, storeName);
+      repushProps.setProperty(SOURCE_KAFKA, "true");
+      repushProps.setProperty(VENICE_STORE_NAME_PROP, storeName);
+      repushProps.setProperty(KAFKA_INPUT_BROKER_URL, brokerWrapper.getAddress());
+      repushProps.setProperty(KAFKA_INPUT_MAX_RECORDS_PER_MAPPER, "5");
+      repushProps.setProperty(KAFKA_INPUT_COMBINER_ENABLED, "true");
+
+      runVPJ(repushProps, 2, controllerClient);
+      LOGGER.info("Re-push to v2 (without Global RT DIV) completed");
+
+      // Step 4: Verify batch data from v1 is carried over to v2
+      verifyAllDataCanBeQueried(client, 1, batchRecordCount, VALUE_PREFIX);
+      LOGGER.info("V2 batch data (from re-push) verified");
+
+      // Verify the v1 RT data was also carried over (re-push from Kafka includes RT data within rewind)
+      verifyAllDataCanBeQueried(client, 101, 130, V1_RT_PREFIX);
+      LOGGER.info("V1 RT data carried over to v2 verified");
+
+      // Verify servers are healthy: write new RT data after repush (without Global RT DIV)
+      writeRTData(rtTopicName, 131, 150, POST_REPUSH_RT_PREFIX, writerFactory);
+      verifyAllDataCanBeQueried(client, 131, 150, POST_REPUSH_RT_PREFIX);
+      LOGGER.info("Post-repush RT data verified — servers are healthy");
+
+      // Verify Global RT DIV is disabled on the new version
+      storeInfo = TestUtils.assertCommand(controllerClient.getStore(storeName)).getStore();
+      assertFalse(storeInfo.isGlobalRtDivEnabled(), "Global RT DIV should be disabled after update");
+      int currentVersion = storeInfo.getCurrentVersion();
+      assertEquals(currentVersion, 2, "Current version should be 2");
+
+      // Verify all servers are still running (no crashes)
+      venice.getVeniceServers().forEach(server -> {
+        assertTrue(server.isRunning(), "Server " + server.getAddress() + " should still be running after repush");
+      });
+    }
+  }
 }
