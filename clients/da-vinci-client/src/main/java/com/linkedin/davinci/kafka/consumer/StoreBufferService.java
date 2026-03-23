@@ -720,7 +720,14 @@ public class StoreBufferService extends AbstractStoreBufferService {
             lastRecordPersistedFuture.isCompletedExceptionally());
         return;
       }
-      getIngestionTask().updateAndSyncOffsetFromSnapshot(vtDivSnapshot, getConsumerRecord().getTopicPartition());
+      try {
+        getIngestionTask().updateAndSyncOffsetFromSnapshot(vtDivSnapshot, getConsumerRecord().getTopicPartition());
+      } catch (Exception e) {
+        LOGGER.error(
+            "event=globalRtDiv Failed to sync VT DIV offset for {}. Ingestion will continue.",
+            getConsumerRecord().getTopicPartition(),
+            e);
+      }
     }
 
     @Override

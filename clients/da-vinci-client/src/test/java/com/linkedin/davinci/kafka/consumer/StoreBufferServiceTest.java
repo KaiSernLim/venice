@@ -418,4 +418,40 @@ public class StoreBufferServiceTest {
 
     bufferService.stop();
   }
+
+  /**
+   * Verify that SyncVtDivNode.execute() swallows exceptions from updateAndSyncOffsetFromSnapshot().
+   * Global RT DIV is best-effort: sync failures should not propagate to the drainer thread.
+   */
+  @Test
+  public void testSyncVtDivNodeSwallowsException() throws Exception {
+    StoreBufferService bufferService = new StoreBufferService(1, 10000, 1000, false, mockedStats, null);
+    StoreIngestionTask mockTask = mock(StoreIngestionTask.class);
+    PartitionTracker mockSnapshot = mock(PartitionTracker.class);
+
+    int partition = 1;
+    String topic = Utils.getUniqueString("test_topic") + "_v1";
+    PubSubTopic pubSubTopic = pubSubTopicRepository.getTopic(topic);
+    PubSubTopicPartition topicPartition = new PubSubTopicPartitionImpl(pubSubTopic, partition);
+
+    // Make updateAndSyncOffsetFromSnapshot throw
+    doThrow(new RuntimeException("Simulated storage failure")).when(mockTask)
+        .updateAndSyncOffsetFromSnapshot(any(), any());
+
+    CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
+    bufferService.start();
+
+    // SyncVtDivNode should swallow the exception; drainer should continue processing
+    bufferService.execSyncOffsetFromSnapshotAsync(topicPartition, mockSnapshot, future, mockTask);
+
+    // Wait for the drainer to process the node
+    verify(mockTask, timeout(TIMEOUT_IN_MS).times(1)).updateAndSyncOffsetFromSnapshot(mockSnapshot, topicPartition);
+
+    // Verify the drainer is still alive by processing another sync request successfully
+    clearInvocations(mockTask);
+    bufferService.execSyncOffsetFromSnapshotAsync(topicPartition, mockSnapshot, future, mockTask);
+    verify(mockTask, timeout(TIMEOUT_IN_MS).times(1)).updateAndSyncOffsetFromSnapshot(mockSnapshot, topicPartition);
+
+    bufferService.stop();
+  }
 }

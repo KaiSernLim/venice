@@ -37,6 +37,7 @@ import com.linkedin.davinci.compression.StorageEngineBackedCompressorFactory;
 import com.linkedin.davinci.config.VeniceServerConfig;
 import com.linkedin.davinci.config.VeniceStoreVersionConfig;
 import com.linkedin.davinci.helix.LeaderFollowerPartitionStateModel;
+import com.linkedin.davinci.kafka.consumer.StoreIngestionTask.DelegateConsumerRecordResult;
 import com.linkedin.davinci.stats.AggHostLevelIngestionStats;
 import com.linkedin.davinci.stats.AggVersionedIngestionStats;
 import com.linkedin.davinci.stats.HostLevelIngestionStats;
@@ -770,6 +771,43 @@ public class LeaderFollowerStoreIngestionTaskTest {
     assertEquals(vtDivCaptor.getValue().getLatestConsumedVtPosition(), specificPosition);
   }
 
+  /**
+   * Verify that sendGlobalRtDivMessage does not throw when internal operations fail.
+   * Global RT DIV is best-effort: serialization or VeniceWriter failures should be logged but not kill ingestion.
+   */
+  @Test
+  public void testSendGlobalRtDivMessageSwallowsException() throws InterruptedException, IOException {
+    setUp();
+    int partition = 1;
+    DefaultPubSubMessage mockMessage = mock(DefaultPubSubMessage.class);
+    PubSubTopicPartition mockTopicPartition = mock(PubSubTopicPartition.class);
+    LeaderProducedRecordContext context = mock(LeaderProducedRecordContext.class);
+    PubSubPosition pos = ApacheKafkaOffsetPosition.of(3L);
+    doReturn(pos).when(context).getConsumedPosition();
+    doReturn(partition).when(mockTopicPartition).getPartitionNumber();
+    doReturn(pos).when(mockMessage).getPosition();
+    doReturn(mockTopicPartition).when(mockMessage).getTopicPartition();
+
+    // Make the VeniceWriter throw to simulate failure during VT production
+    VeniceWriter mockWriter = mock(VeniceWriter.class);
+    Lazy<VeniceWriter<byte[], byte[], byte[]>> lazyMockWriter = Lazy.of(() -> mockWriter);
+    doReturn(lazyMockWriter).when(mockPartitionConsumptionState).getVeniceWriterLazyRef();
+    doReturn(mock(KafkaMessageEnvelope.class)).when(mockWriter)
+        .getKafkaMessageEnvelope(any(), anyBoolean(), anyInt(), anyBoolean(), any(), anyLong());
+    doThrow(new VeniceException("Simulated VeniceWriter failure")).when(mockWriter)
+        .put(any(), any(), anyInt(), anyInt(), any(), any(), anyLong(), any(), any(), any(), anyBoolean());
+
+    // Should not throw despite VeniceWriter failure
+    leaderFollowerStoreIngestionTask.sendGlobalRtDivMessage(
+        mockMessage,
+        mockPartitionConsumptionState,
+        partition,
+        "localhost:1234",
+        0L,
+        null,
+        context);
+  }
+
   @Test
   public void testUpdateLatestConsumedVtOffset() throws InterruptedException {
     setUp();
@@ -788,6 +826,34 @@ public class LeaderFollowerStoreIngestionTaskTest {
     // delegateConsumerRecord() should cause updateLatestConsumedVtPosition() to be called
     mockIngestionTask.delegateConsumerRecord(cm, 0, "testURL", 0, 0, 0);
     verify(consumerDiv, times(1)).updateLatestConsumedVtPosition(0, cm.getMessage().getPosition());
+  }
+
+  /**
+   * Verify that delegateConsumerRecord does not throw when updateLatestConsumedVtPosition fails.
+   * Global RT DIV is best-effort: LCVP update failures should be logged but not kill ingestion.
+   */
+  @Test
+  public void testDelegateConsumerRecordSwallowsLcvpUpdateException() throws InterruptedException {
+    setUp();
+    LeaderFollowerStoreIngestionTask mockIngestionTask = mock(LeaderFollowerStoreIngestionTask.class);
+    PubSubMessageProcessedResultWrapper cm = getMockMessage(1);
+    PubSubTopic mockTopic = cm.getMessage().getTopicPartition().getPubSubTopic();
+    doReturn(false).when(mockTopic).isRealTime();
+    doReturn(mockPartitionConsumptionState).when(mockIngestionTask).getPartitionConsumptionState(anyInt());
+    doReturn(LeaderFollowerStateType.STANDBY).when(mockPartitionConsumptionState).getLeaderFollowerState();
+    doCallRealMethod().when(mockIngestionTask)
+        .delegateConsumerRecord(any(), anyInt(), any(), anyInt(), anyLong(), anyLong());
+    DataIntegrityValidator consumerDiv = mock(DataIntegrityValidator.class);
+    doReturn(consumerDiv).when(mockIngestionTask).getConsumerDiv();
+    doReturn(true).when(mockIngestionTask).isGlobalRtDivEnabled();
+
+    // Make updateLatestConsumedVtPosition throw to simulate failure
+    doThrow(new RuntimeException("Simulated DIV failure")).when(consumerDiv)
+        .updateLatestConsumedVtPosition(anyInt(), any());
+
+    // Should not throw despite LCVP update failure
+    DelegateConsumerRecordResult result = mockIngestionTask.delegateConsumerRecord(cm, 0, "testURL", 0, 0, 0);
+    assertEquals(result, DelegateConsumerRecordResult.QUEUED_TO_DRAINER);
   }
 
   @Test
@@ -1948,6 +2014,34 @@ public class LeaderFollowerStoreIngestionTaskTest {
     Assert.assertEquals(stored.length, ValueRecord.SCHEMA_HEADER_LENGTH + testValueBytes.length);
     Assert.assertEquals(ByteUtils.readInt(stored, 0), GLOBAL_RT_DIV_VERSION);
     Assert.assertEquals(Arrays.copyOfRange(stored, ValueRecord.SCHEMA_HEADER_LENGTH, stored.length), testValueBytes);
+  }
+
+  /**
+   * Verify that putGlobalRtDivStateInMetadata does not throw when the storage engine fails.
+   * Global RT DIV is best-effort: storage failures should be logged but not kill ingestion.
+   */
+  @Test
+  public void testPutGlobalRtDivStateInMetadataSwallowsException() throws Exception {
+    LeaderFollowerStoreIngestionTask ingestionTask = mock(LeaderFollowerStoreIngestionTask.class);
+    doCallRealMethod().when(ingestionTask).putGlobalRtDivStateInMetadata(anyInt(), any(), any());
+
+    DelegatingStorageEngine<?> mockStorageEngine = mock(DelegatingStorageEngine.class);
+    doThrow(new VeniceException("Metadata partition not created")).when(mockStorageEngine)
+        .putGlobalRtDivMetadata(any(), any());
+    injectField(ingestionTask, StoreIngestionTask.class, "storageEngine", mockStorageEngine);
+
+    byte[] testValueBytes = "test-value".getBytes(StandardCharsets.UTF_8);
+    Put put = new Put();
+    put.schemaId = GLOBAL_RT_DIV_VERSION;
+    ByteBuffer valueWithHeader = ByteBuffer.allocate(ValueRecord.SCHEMA_HEADER_LENGTH + testValueBytes.length);
+    valueWithHeader.putInt(GLOBAL_RT_DIV_VERSION);
+    valueWithHeader.put(testValueBytes);
+    valueWithHeader.position(ValueRecord.SCHEMA_HEADER_LENGTH);
+    put.putValue = valueWithHeader;
+
+    // Should not throw despite storage failure
+    ingestionTask.putGlobalRtDivStateInMetadata(0, "test-key".getBytes(StandardCharsets.UTF_8), put);
+    verify(mockStorageEngine, times(1)).putGlobalRtDivMetadata(any(), any());
   }
 
   /**

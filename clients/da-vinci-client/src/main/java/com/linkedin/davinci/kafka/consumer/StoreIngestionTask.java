@@ -312,7 +312,6 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
    */
   protected final DataIntegrityValidator consumerDiv;
   /** Map of (RT broker URL | VT name) to the total bytes consumed by ConsumptionTask since the last Global RT DIV sync */
-  // TODO: clear it out when the sync is done
   protected final VeniceConcurrentHashMap<String, Long> consumedBytesSinceLastSync;
   protected final HostLevelIngestionStats hostLevelIngestionStats;
   protected final AggVersionedDIVStats versionedDIVStats;
@@ -2153,7 +2152,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
   protected void updateOffsetMetadataAndSyncOffset(DataIntegrityValidator div, @Nonnull PartitionConsumptionState pcs) {
     if (isGlobalRtDivEnabled()) {
-      LOGGER.info("Skipping updateOffsetMetadataAndSyncOffset() because Global RT DIV is enabled.");
+      LOGGER.debug("Skipping updateOffsetMetadataAndSyncOffset() because Global RT DIV is enabled.");
       return;
     }
     /**
@@ -4426,9 +4425,16 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   }
 
   protected void putGlobalRtDivStateInMetadata(int partition, byte[] keyBytes, Put put) {
-    storageEngine.putGlobalRtDivMetadata(
-        keyBytes,
-        ByteUtils.prependIntHeaderToByteBuffer(put.putValue, put.schemaId, false).array());
+    try {
+      storageEngine.putGlobalRtDivMetadata(
+          keyBytes,
+          ByteUtils.prependIntHeaderToByteBuffer(put.putValue, put.schemaId, false).array());
+    } catch (Exception e) {
+      LOGGER.error(
+          "event=globalRtDiv Failed to persist Global RT DIV state for partition: {}. Ingestion will continue.",
+          partition,
+          e);
+    }
   }
 
   protected void removeFromStorageEngine(int partition, byte[] keyBytes, Delete delete) {
@@ -4802,7 +4808,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
 
         keyLen = keyBytes.length;
         if (kafkaKey.isGlobalRtDiv()) {
-          storageEngine.deleteGlobalRtDivMetadata(keyBytes);
+          try {
+            storageEngine.deleteGlobalRtDivMetadata(keyBytes);
+          } catch (Exception e) {
+            LOGGER.error(
+                "event=globalRtDiv Failed to delete Global RT DIV metadata for partition: {}. Ingestion will continue.",
+                producedPartition,
+                e);
+          }
         } else {
           deleteFromStorageEngine(producedPartition, keyBytes, delete);
         }
