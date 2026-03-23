@@ -1363,7 +1363,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
           pubSubAddress);
     }
     consumerSubscribe(leaderTopic, pcs, startPos, pubSubAddress);
-    // TODO: clear the LCRP map in the PCS after subscribing and set the value for this brokerUrl as null?
+    // LCRP is not cleared here; it is overwritten by loadGlobalRtDiv on each F->L transition.
     syncConsumedUpstreamRTOffsetMapIfNeeded(pcs, Collections.singletonMap(pubSubAddress, startPos));
     LOGGER.info(
         "Leader replica: {} started consuming: {} from: {}",
@@ -2704,11 +2704,8 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       return Collections.emptyList();
     }
 
-    /*
-     * Global RT DIV messages should only be from VT, but these VT messages need to be validated in the section below
-     * These messages will be contributed towards the segments in VeniceWriter when the Global RT DIV is produced to RT
-     * Either skip validation + skip adding to segments in both locations or keep in both, and we're keeping for now
-     */
+    // Leaders validate RT messages before producing to VT (shouldProduceToVersionTopic).
+    // With Global RT DIV, followers also validate VT messages here via consumerDiv (drainer validation is skipped).
     if (!shouldProduceToVersionTopic(pcs) && !isGlobalRtDivEnabled()) {
       return records;
     }
@@ -3139,13 +3136,15 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     }
   }
 
+  @Override
   void syncOffsetFromSnapshotIfNeeded(DefaultPubSubMessage record, PubSubTopicPartition topicPartition) {
-    int partition = topicPartition.getPartitionNumber();
-    if (!isGlobalRtDivEnabled() || !shouldSyncOffsetFromSnapshot(record, getPartitionConsumptionState(partition))) {
+    if (!isGlobalRtDivEnabled()) {
       return; // without Global RT DIV enabled, the offset record is synced in the drainer in syncOffset()
     }
-
     PartitionConsumptionState pcs = getPartitionConsumptionState(topicPartition.getPartitionNumber());
+    if (!shouldSyncOffsetFromSnapshot(record, pcs)) {
+      return;
+    }
     if (pcs == null || pcs.getLastQueuedRecordPersistedFuture() == null) {
       LOGGER.warn(
           "event=globalRtDiv No PCS or lastRecordPersistedFuture found for topic-partition: {}. "
@@ -3154,6 +3153,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       return;
     }
 
+    int partition = topicPartition.getPartitionNumber();
     try {
       // VT DIV contains the latest consumed VT position (LCVP)
       PartitionTracker vtDiv = consumerDiv.cloneVtProducerStates(partition, true);

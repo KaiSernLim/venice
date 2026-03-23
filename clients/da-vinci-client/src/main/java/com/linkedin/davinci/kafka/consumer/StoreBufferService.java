@@ -712,12 +712,18 @@ public class StoreBufferService extends AbstractStoreBufferService {
     }
 
     public void execute() {
-      if (!lastRecordPersistedFuture.isDone() || lastRecordPersistedFuture.isCompletedExceptionally()) {
+      if (lastRecordPersistedFuture.isCompletedExceptionally()) {
         LOGGER.warn(
-            "event=globalRtDiv Skipping SyncVtDivNode for {} because preceding record failed (done={} exception={})",
-            getConsumerRecord().getTopicPartition(),
-            lastRecordPersistedFuture.isDone(),
-            lastRecordPersistedFuture.isCompletedExceptionally());
+            "event=globalRtDiv Skipping SyncVtDivNode for {} because preceding record persisted with exception",
+            getConsumerRecord().getTopicPartition());
+        return;
+      }
+      if (!lastRecordPersistedFuture.isDone()) {
+        // Safety guard: SyncVtDivNode is enqueued after the preceding record, so by the time the drainer
+        // reaches this node, the future should already be done. Log if this invariant is violated.
+        LOGGER.warn(
+            "event=globalRtDiv Skipping SyncVtDivNode for {} because preceding record has not yet been persisted",
+            getConsumerRecord().getTopicPartition());
         return;
       }
       try {
