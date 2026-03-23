@@ -451,6 +451,8 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
   protected Lazy<CountDownLatch> gracefulShutdownLatch = Lazy.of(() -> new CountDownLatch(1));
   protected Lazy<ZKHelixAdmin> zkHelixAdmin;
   protected final String hostName;
+  /** Same host identity in writer format ("host:port") for zero-alloc comparison in {@link #isRecordSelfProduced}. */
+  private final String hostNameWriterFormat;
   private boolean skipAfterBatchPushUnsubEnabled = false;
   private final List<AutoCloseable> thingsToClose = new ArrayList<>();
   private final Version version;
@@ -734,6 +736,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     this.batchReportIncPushStatusEnabled = !isDaVinciClient && serverConfig.getBatchReportEOIPEnabled();
     this.parallelProcessingThreadPool = builder.getAAWCWorkLoadProcessingThreadPool();
     this.hostName = Utils.getHostName() + "_" + storeVersionConfig.getListenerPort();
+    this.hostNameWriterFormat = Utils.getHostName() + ":" + storeVersionConfig.getListenerPort();
     this.zkHelixAdmin = zkHelixAdmin;
     this.blobTransferHelper = builder.getBlobTransferHelper(storageService);
   }
@@ -4261,7 +4264,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     if (leaderMetadata == null) {
       return false;
     }
-    return leaderMetadata.getHostName().toString().replace(":", "_").equals(hostName);
+    return hostNameWriterFormat.contentEquals(leaderMetadata.getHostName());
   }
 
   /**

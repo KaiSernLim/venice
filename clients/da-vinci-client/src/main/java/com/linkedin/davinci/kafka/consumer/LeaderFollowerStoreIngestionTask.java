@@ -2060,19 +2060,15 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
     getHostLevelIngestionStats().recordLeaderProduceLatency(enqueueLatency);
     getVersionIngestionStats().recordProducerEnqueueTime(storeName, versionNumber, enqueueLatency);
 
-    try {
-      if (shouldSendGlobalRtDiv(consumerRecord, partitionConsumptionState, kafkaUrl)) {
-        sendGlobalRtDivMessage(
-            consumerRecord,
-            partitionConsumptionState,
-            partition,
-            kafkaUrl,
-            beforeProcessingRecordTimestampNs,
-            leaderMetadataWrapper,
-            leaderProducedRecordContext);
-      }
-    } catch (Exception e) {
-      LOGGER.error("Failed to send Global RT DIV message", e); // don't fail ingestion if sending Global RT DIV fails
+    if (shouldSendGlobalRtDiv(consumerRecord, partitionConsumptionState, kafkaUrl)) {
+      sendGlobalRtDivMessage(
+          consumerRecord,
+          partitionConsumptionState,
+          partition,
+          kafkaUrl,
+          beforeProcessingRecordTimestampNs,
+          leaderMetadataWrapper,
+          leaderProducedRecordContext);
     }
   }
 
@@ -3204,8 +3200,10 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       return false;
     }
 
-    // must be greater than the interval in shouldSendGlobalRtDiv() to not interfere
-    final long syncBytesInterval = getSyncBytesInterval(pcs); // size-based sync condition
+    // The 2x multiplier ensures the follower's VT offset sync fires less frequently than the leader's RT DIV
+    // send (which uses 1x syncBytesInterval). This avoids redundant syncs since each Global RT DIV message
+    // already triggers a VT offset sync via SyncVtDivNode.
+    final long syncBytesInterval = getSyncBytesInterval(pcs);
     long vtConsumedBytesSinceLastSync = getConsumedBytesSinceLastSync().getOrDefault(getVersionTopic().getName(), 0L);
     return syncBytesInterval > 0 && (vtConsumedBytesSinceLastSync >= 2 * syncBytesInterval);
   }
@@ -3853,9 +3851,8 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   }
 
   public byte[] getGlobalRtDivKeyBytes(int partitionId, String brokerUrl) {
-    return globalRtDivKeyBytesCache.computeIfAbsent(
-        partitionId + "." + brokerUrl,
-        k -> getGlobalRtDivKeyName(partitionId, brokerUrl).getBytes(StandardCharsets.UTF_8));
+    String keyName = getGlobalRtDivKeyName(partitionId, brokerUrl);
+    return globalRtDivKeyBytesCache.computeIfAbsent(keyName, k -> k.getBytes(StandardCharsets.UTF_8));
   }
 
   /**

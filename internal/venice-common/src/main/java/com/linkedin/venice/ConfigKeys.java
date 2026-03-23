@@ -3161,12 +3161,6 @@ public class ConfigKeys {
   public static final String CONTROLLER_DEAD_STORE_STATS_PREFIX = "controller.dead.store.stats.";
 
   /**
-   * Enables / disables the Global RT DIV feature. Default value is disabled. The DIV will be centralized in the
-   * ConsumptionTask, and leaders will periodically replicate the RT DIV to followers via VT.
-   */
-  public static final String GLOBAL_RT_DIV_ENABLED = "global.rt.div.enabled";
-
-  /**
    * The interval for cleaning up the idle store ingestion tasks in a centralized way inside KafkaStoreIngestionService.
    * If config value is non-positive, it means the new clean up service is disabled and the old mechanism is still in place.
    * If config value is positive, it means the new clean up service is enabled and the value is the clean up
