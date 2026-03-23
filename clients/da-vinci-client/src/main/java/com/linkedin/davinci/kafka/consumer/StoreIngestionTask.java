@@ -1599,7 +1599,7 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
             linkBackManifestFromTransientRecord(processedRecord, partitionConsumptionState);
           }
 
-          totalBytesRead += handleSingleMessage(
+          int recordSize = handleSingleMessage(
               processedRecord,
               topicPartition,
               partitionConsumptionState,
@@ -1608,6 +1608,14 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
               beforeProcessingPerRecordTimestampNs,
               beforeProcessingBatchRecordsTimestampMs,
               elapsedTimeForPuttingIntoQueue);
+          totalBytesRead += recordSize;
+
+          // Track consumed bytes for Global RT DIV (matches the non-batch path)
+          PubSubTopic topic = topicPartition.getPubSubTopic();
+          if (isGlobalRtDivEnabled() && (versionTopic.equals(topic) || topic.isRealTime())) {
+            String consumedBytesKey = versionTopic.equals(topic) ? versionTopic.getName() : kafkaUrl;
+            consumedBytesSinceLastSync.compute(consumedBytesKey, (k, v) -> (v == null) ? recordSize : v + recordSize);
+          }
 
           // Only track keys that were actually produced (not ignored by DCR).
           // Ignored records don't call setChunkingInfo, so the transient record's
@@ -2173,6 +2181,12 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
    */
   protected void updateAndSyncOffsetFromSnapshot(PartitionTracker vtDivSnapshot, PubSubTopicPartition topicPartition) {
     PartitionConsumptionState pcs = getPartitionConsumptionState(topicPartition.getPartitionNumber());
+    if (pcs == null) {
+      LOGGER.warn(
+          "event=globalRtDiv No PCS found for topic-partition: {}. Skipping offset sync from snapshot.",
+          topicPartition);
+      return;
+    }
     vtDivSnapshot.updateOffsetRecord(PartitionTracker.VERSION_TOPIC, pcs.getOffsetRecord());
     updateOffsetMetadataInOffsetRecord(pcs);
     syncOffset(pcs);

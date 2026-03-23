@@ -554,7 +554,6 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             try {
               getConsumerDiv().updateLatestConsumedVtPosition(partition, subscribePosition); // LCVP
               getConsumerDiv().clearRtSegments(partition); // clear RT, because we are switching back to VT consumption
-              // TODO: remove. this is a temporary log for debugging while the feature is in its infancy
               LOGGER.info(
                   "event=globalRtDiv L->F Subscribed to: {} position: {} for broker: {}",
                   Utils.getReplicaId(topic, partition),
@@ -1357,7 +1356,6 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
           .getOrDefault(NON_AA_REPLICATION_UPSTREAM_OFFSET_MAP_KEY, PubSubSymbolicPosition.EARLIEST);
     }
     if (shouldUseDivRtPosition) {
-      // TODO: remove. this is a temporary log for debugging while the feature is in its infancy
       LOGGER.info(
           "event=globalRtDiv F->L Subscribing to {} at position: {} for broker: {}",
           Utils.getReplicaId(leaderTopic, pcs.getPartition()),
@@ -3169,8 +3167,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       // firing for every subsequent record.
       getConsumedBytesSinceLastSync().put(getVersionTopic().getName(), 0L);
 
-      // TODO: remove. this is a temporary log for debugging while the feature is in its infancy
-      LOGGER.info(
+      LOGGER.debug(
           "event=globalRtDiv Syncing LCVP for OffsetRecord topic-partition: {} position: {} size: {}",
           topicPartition,
           record.getPosition(),
@@ -3915,8 +3912,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
         }
       }
 
-      // TODO: remove. this is a temporary log for debugging while the feature is in its infancy
-      LOGGER.info(
+      LOGGER.debug(
           "event=globalRtDiv Sending Global RT DIV message for topic-partition: {} versionTopic: {} LCRP: {} broker: {} producerCount: {}, valueSize: {}",
           previousMessage.getTopicPartition(),
           versionTopic,
@@ -4095,7 +4091,6 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       return globalRtDivStateSerializer
           .deserialize(serializedValueBytes, AvroProtocolDefinition.GLOBAL_RT_DIV_STATE.getCurrentProtocolVersion());
     } catch (Exception e) {
-      // TODO: evaluate whether these logs can be set to debug
       LOGGER.error(
           "Unable to deserialize stored value bytes for key: {}, topic-partition: {}",
           new String(keyBytes, StandardCharsets.UTF_8),
@@ -4244,7 +4239,6 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       pcs.setDivRtCheckpointPosition(brokerUrl, divRtCheckpointPosition);
 
       producerStates.forEach((producer, pps) -> {
-        // TODO: remove. this is a temporary log for debugging while the feature is in its infancy
         LOGGER.info(
             "event=globalRtDiv Loaded Global RT DIV State from disk topic-partition: {} brokerUrl: {} producer: {} position: {} pps: {}",
             topicPartition,

@@ -116,6 +116,7 @@ import com.linkedin.davinci.store.record.ValueRecord;
 import com.linkedin.davinci.store.rocksdb.RocksDBServerConfig;
 import com.linkedin.davinci.transformer.TestStringRecordTransformer;
 import com.linkedin.davinci.validation.DataIntegrityValidator;
+import com.linkedin.davinci.validation.PartitionTracker;
 import com.linkedin.venice.compression.CompressionStrategy;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.exceptions.VeniceIngestionTaskKilledException;
@@ -6219,6 +6220,26 @@ public abstract class StoreIngestionTaskTest {
     consumedBytesMap.clear();
     sit.produceToStoreBufferServiceOrKafka(records, new PubSubTopicPartitionImpl(remoteVt, partition), kafkaUrl, 0);
     assertTrue(consumedBytesMap.isEmpty(), "Remote VT should not be tracked");
+  }
+
+  /**
+   * Verifies that {@link StoreIngestionTask#updateAndSyncOffsetFromSnapshot} gracefully handles the case when
+   * PCS is null (e.g., partition was unsubscribed between enqueue and drainer execution).
+   */
+  @Test
+  public void testUpdateAndSyncOffsetFromSnapshotWithNullPcs() {
+    StoreIngestionTask sit = mock(StoreIngestionTask.class);
+    doCallRealMethod().when(sit).updateAndSyncOffsetFromSnapshot(any(), any());
+    doReturn(null).when(sit).getPartitionConsumptionState(anyInt());
+
+    PubSubTopicPartition topicPartition = new PubSubTopicPartitionImpl(pubSubTopic, 0);
+    PartitionTracker vtDivSnapshot = mock(PartitionTracker.class);
+
+    // Should not throw NPE; should return gracefully
+    sit.updateAndSyncOffsetFromSnapshot(vtDivSnapshot, topicPartition);
+
+    // Verify that we never tried to use the null PCS to sync
+    verify(vtDivSnapshot, never()).updateOffsetRecord(any(), any());
   }
 
   /**
