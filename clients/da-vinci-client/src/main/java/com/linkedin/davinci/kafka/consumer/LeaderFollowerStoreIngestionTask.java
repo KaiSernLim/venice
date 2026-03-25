@@ -90,6 +90,7 @@ import com.linkedin.venice.serialization.avro.AvroProtocolDefinition;
 import com.linkedin.venice.serialization.avro.InternalAvroSpecificSerializer;
 import com.linkedin.venice.serializer.RecordDeserializer;
 import com.linkedin.venice.stats.StatsErrorCode;
+import com.linkedin.venice.stats.dimensions.VeniceGlobalRtDivLoadOutcome;
 import com.linkedin.venice.stats.dimensions.VeniceIngestionFailureReason;
 import com.linkedin.venice.stats.dimensions.VenicePartialUpdateOperation;
 import com.linkedin.venice.stats.dimensions.VeniceRegionLocality;
@@ -3159,6 +3160,10 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
       PartitionTracker vtDiv = consumerDiv.cloneVtProducerStates(partition, true);
       CompletableFuture<Void> lastFuture = pcs.getLastQueuedRecordPersistedFuture();
       storeBufferService.execSyncOffsetFromSnapshotAsync(topicPartition, vtDiv, lastFuture, this);
+      versionedIngestionStats.recordGlobalRtDivVtSyncProducerCount(
+          storeName,
+          versionNumber,
+          vtDiv.getPartitionStates(PartitionTracker.VERSION_TOPIC).size());
       // Reset consumer-side VT bytes so the size-based condition in shouldSyncOffsetFromSnapshot does not keep
       // firing for every subsequent record.
       getConsumedBytesSinceLastSync().put(getVersionTopic().getName(), 0L);
@@ -3918,6 +3923,9 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
           rtDivPartitionStates.size(),
           valueBytes.length);
 
+      versionedIngestionStats
+          .recordGlobalRtDivSendRtProducerCount(storeName, versionNumber, rtDivPartitionStates.size());
+
       // Produce to local VT for the Global RT DIV + latest RT position (GlobalRtDivState)
       // Internally, VeniceWriter.put() will schedule DELETEs for the old chunks in the old manifest after the new PUTs
       getVeniceWriter(pcs).get()
@@ -4223,6 +4231,8 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             brokerUrl,
             leaderPosition);
       }
+      versionedIngestionStats
+          .recordGlobalRtDivLoad(storeName, versionNumber, VeniceGlobalRtDivLoadOutcome.NOT_FOUND, 0);
       return; // it may not exist (e.g. this is the first leader to be elected)
     }
 
@@ -4244,6 +4254,8 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
             divRtCheckpointPosition,
             pps);
       });
+      versionedIngestionStats
+          .recordGlobalRtDivLoad(storeName, versionNumber, VeniceGlobalRtDivLoadOutcome.FOUND, producerStates.size());
     } catch (Exception e) {
       LOGGER.error(
           "event=globalRtDiv Failed to restore Global RT DIV state for topic-partition: {} brokerUrl: {}. "
