@@ -828,6 +828,16 @@ public abstract class StoreIngestionTask implements Runnable, Closeable {
     return versionNumber;
   }
 
+  /**
+   * The {@link Version} snapshot this ingestion task was constructed with. Version-level configs that are
+   * frozen at version-creation time (e.g. {@link Version#getMaxNearlineRecordSizeBytes()}) should be read from
+   * here rather than from the live {@link Store}, so that a later store-level config change does not
+   * retroactively affect an in-flight version.
+   */
+  protected Version getVersion() {
+    return version;
+  }
+
   protected void throwIfNotRunning() {
     if (!isRunning()) {
       throw new VeniceException(" Topic " + kafkaVersionTopic + " is shutting down, no more messages accepted");

@@ -425,6 +425,16 @@ public class ReadOnlyStore implements Store {
     }
 
     @Override
+    public int getMaxNearlineRecordSizeBytes() {
+      return this.delegate.getMaxNearlineRecordSizeBytes();
+    }
+
+    @Override
+    public void setMaxNearlineRecordSizeBytes(int maxNearlineRecordSizeBytes) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public String getStoreName() {
       return this.delegate.getStoreName();
     }
@@ -2061,6 +2071,7 @@ public class ReadOnlyStore implements Store {
     // storeVersion.setBufferReplayEnabledForHybrid();
     storeVersion.setChunkingEnabled(version.isChunkingEnabled());
     storeVersion.setRmdChunkingEnabled(version.isRmdChunkingEnabled());
+    storeVersion.setMaxNearlineRecordSizeBytes(version.getMaxNearlineRecordSizeBytes());
     storeVersion.setPushType(version.getPushType().getValue());
     storeVersion.setPartitionCount(version.getPartitionCount());
     storeVersion.setPartitionerConfig(convertPartitionerConfig(version.getPartitionerConfig()));

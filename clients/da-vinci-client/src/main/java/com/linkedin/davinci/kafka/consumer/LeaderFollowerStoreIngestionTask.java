@@ -2980,8 +2980,10 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   }
 
   /**
-   * maxRecordSizeBytes (and the nearline variant) is a store-level config that defaults to -1.
-   * The default value will be set fleet-wide using the default.max.record.size.bytes on config the server and controller.
+   * {@code maxRecordSizeBytes} is a store-level config read live from the {@link com.linkedin.venice.meta.Store},
+   * whereas {@code maxNearlineRecordSizeBytes} is a version-level config snapshotted onto the {@link
+   * com.linkedin.venice.meta.Version} at version-creation time. Both default to -1, in which case the fleet-wide
+   * default.max.record.size.bytes server config is backfilled.
    */
   private int backfillRecordSizeLimit(int recordSizeLimit) {
     return (recordSizeLimit > 0) ? recordSizeLimit : serverConfig.getDefaultMaxRecordSizeBytes();
@@ -2992,7 +2994,7 @@ public class LeaderFollowerStoreIngestionTask extends StoreIngestionTask {
   }
 
   protected int getMaxNearlineRecordSizeBytes() {
-    return backfillRecordSizeLimit(storeRepository.getStore(storeName).getMaxNearlineRecordSizeBytes());
+    return backfillRecordSizeLimit(getVersion().getMaxNearlineRecordSizeBytes());
   }
 
   @Override

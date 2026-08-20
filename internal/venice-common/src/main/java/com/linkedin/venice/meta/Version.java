@@ -185,6 +185,10 @@ public interface Version extends Comparable<Version>, DataModelBackedStructure<S
 
   void setRmdChunkingEnabled(boolean rmdChunkingEnabled);
 
+  int getMaxNearlineRecordSizeBytes();
+
+  void setMaxNearlineRecordSizeBytes(int maxNearlineRecordSizeBytes);
+
   String getStoreName();
 
   String getPushJobId();

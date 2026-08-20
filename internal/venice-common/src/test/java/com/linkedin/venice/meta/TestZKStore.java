@@ -572,4 +572,37 @@ public class TestZKStore {
     Assert.assertEquals(store.getVersion(1).getStorageMode(), StorageMode.DUAL_WRITE);
   }
 
+  @Test
+  public void testAddVersionCopiesStoreLevelMaxNearlineRecordSizeBytes() {
+    Store store = TestUtils.createTestStore("testStore", "owner", System.currentTimeMillis());
+    store.setMaxNearlineRecordSizeBytes(1024);
+    Version newVersion = new VersionImpl(store.getName(), 1, "pushJobId");
+    store.addVersion(newVersion);
+    // addVersion snapshots the current store-level value onto the new version.
+    Assert.assertEquals(store.getVersion(1).getMaxNearlineRecordSizeBytes(), 1024);
+    // A later store-level change does NOT mutate the already-added version.
+    store.setMaxNearlineRecordSizeBytes(2048);
+    Assert.assertEquals(store.getVersion(1).getMaxNearlineRecordSizeBytes(), 1024);
+  }
+
+  @Test
+  public void testVersionLevelMaxNearlineRecordSizeBytesDefault() {
+    Version version = new VersionImpl("testStore", 1, "pushJobId");
+    Assert.assertEquals(version.getMaxNearlineRecordSizeBytes(), -1);
+  }
+
+  @Test
+  public void testVersionLevelMaxNearlineRecordSizeBytesPersistsThroughAvroDataModel() {
+    VersionImpl version = new VersionImpl("testStore", 1, "pushJobId");
+    version.setMaxNearlineRecordSizeBytes(4096);
+    Assert.assertEquals(version.dataModel().maxNearlineRecordSizeBytes, 4096);
+  }
+
+  @Test
+  public void testCloneVersionPreservesMaxNearlineRecordSizeBytes() {
+    Version version = new VersionImpl("testStore", 1, "pushJobId");
+    version.setMaxNearlineRecordSizeBytes(8192);
+    Assert.assertEquals(version.cloneVersion().getMaxNearlineRecordSizeBytes(), 8192);
+  }
+
 }
