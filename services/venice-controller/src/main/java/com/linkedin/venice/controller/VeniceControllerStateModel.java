@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.helix.HelixManagerFactory;
 import org.apache.helix.InstanceType;
 import org.apache.helix.NotificationContext;
@@ -43,7 +44,7 @@ import org.apache.logging.log4j.Logger;
 @StateModelInfo(initialState = HelixState.OFFLINE_STATE, states = { HelixState.LEADER_STATE, HelixState.STANDBY_STATE })
 public class VeniceControllerStateModel extends StateModel {
   private static final String PARTITION_SUFFIX = "_0";
-  private static final int DEFAULT_STANDBY_TO_LEADER_ST_TIMEOUT_IN_MIN = 5;
+  private static final long CLOSE_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(2);
   private static final Logger LOGGER = LogManager.getLogger(VeniceControllerStateModel.class);
 
   private final ZkClient zkClient;
@@ -57,15 +58,17 @@ public class VeniceControllerStateModel extends StateModel {
   private final HelixAdminClient helixAdminClient;
   private final RealTimeTopicSwitcher realTimeTopicSwitcher;
 
-  private VeniceControllerClusterConfig clusterConfig;
-  private SafeHelixManager helixManager;
-  private HelixVeniceClusterResources clusterResources;
+  private volatile VeniceControllerClusterConfig clusterConfig;
+  private volatile SafeHelixManager helixManager;
+  private volatile HelixVeniceClusterResources clusterResources;
 
   private final ExecutorService workerService;
+  private final ExecutorService cleanupService;
+  private final Object lifecycleLock = new Object();
+  private volatile Future<?> latestCleanupFuture;
+  private LeaderInitializationAttempt activeInitialization;
+  private boolean closed;
   private final Optional<List<VeniceVersionLifecycleEventListener>> versionLifecycleEventListeners;
-
-  // Configurable timeout for testing purposes
-  private long stateTransitionTimeoutMs = TimeUnit.MINUTES.toMillis(DEFAULT_STANDBY_TO_LEADER_ST_TIMEOUT_IN_MIN);
 
   public VeniceControllerStateModel(
       String clusterName,
@@ -92,6 +95,8 @@ public class VeniceControllerStateModel extends StateModel {
     this.helixAdminClient = helixAdminClient;
     this.workerService = Executors.newSingleThreadExecutor(
         new DaemonThreadFactory(String.format("Controller-ST-Worker-%s", clusterName), admin.getLogContext()));
+    this.cleanupService = Executors.newSingleThreadExecutor(
+        new DaemonThreadFactory(String.format("Controller-ST-Cleanup-%s", clusterName), admin.getLogContext()));
     this.versionLifecycleEventListeners = versionLifecycleEventListeners;
   }
 
@@ -140,9 +145,12 @@ public class VeniceControllerStateModel extends StateModel {
         message.getResourceName(),
         message.getFromState(),
         message.getToState());
-    return workerService.submit(() -> {
-      executeStateTransitionWithThreadName(threadName, stateTransition);
-    });
+    synchronized (lifecycleLock) {
+      if (closed) {
+        throw new VeniceException("Cannot execute state transition for closed cluster " + clusterName);
+      }
+      return workerService.submit(() -> executeStateTransitionWithThreadName(threadName, stateTransition));
+    }
   }
 
   /**
@@ -189,84 +197,157 @@ public class VeniceControllerStateModel extends StateModel {
      * state transition actions from previous round (e.g. LEADER -> FOLLOWER) for the same controller, it will be
      * blocked until the previous transition is finished.
      *
-     * We give a timeout of 5 minutes for this state transition based on the statistics today. The idea is that we
-     * want to give other good controller a chance to be able to become the leader, if current one was stuck somewhere.
-     * If the timeout is reached, we will throw an exception to indicate that the state transition failed.
+     * The transition timeout gives another healthy controller a chance to become leader if the current one is stuck.
+     * Initialization resources remain private to one generation until initialization completes, so timeout cleanup can
+     * disconnect the manager without concurrently clearing resources that the worker is still mutating.
      */
+    LeaderInitializationAttempt initializationAttempt = newLeaderInitializationAttempt();
     Future<?> stateTransitionFuture = null;
     try {
-      stateTransitionFuture = executeStateTransitionAsync(message, () -> {
-        if (helixManagerInitialized()) {
-          // TODO: It seems like this should throw an exception. Otherwise the case would be you'd have an instance be
-          // leader
-          // in Helix that hadn't subscribed to any resource. This could happen if a state transition thread timed out
-          // and
-          // ERROR'd
-          // and the partition was 'reset' instead of bouncing the process.
-          LOGGER.error(
-              "Helix manager already exists for instance {} on cluster {} and received controller name {}",
-              helixManager.getInstanceName(),
-              clusterName,
-              controllerName);
-        } else {
-          try {
-            initHelixManager(controllerName);
-          } catch (Exception e) {
-            throw new VeniceException("Failed to initialize Helix Manager for " + controllerName, e);
-          }
-          initClusterResources();
-          LOGGER.info(
-              "Controller {} with instance {} is the leader of cluster {}",
-              controllerName,
-              helixManager.getInstanceName(),
-              clusterName);
-        }
-      });
-      stateTransitionFuture.get(stateTransitionTimeoutMs, TimeUnit.MILLISECONDS);
-    } catch (InterruptedException | ExecutionException | TimeoutException e) {
+      stateTransitionFuture =
+          executeStateTransitionAsync(message, () -> initializeAsLeader(initializationAttempt, controllerName));
+      initializationAttempt.future = stateTransitionFuture;
+      stateTransitionFuture.get(clusterConfig.getControllerStandbyToLeaderTransitionTimeoutMs(), TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      abortStateTransition(initializationAttempt, stateTransitionFuture);
+      Thread.currentThread().interrupt();
       LOGGER.error("Failed to execute the controller state transition from STANDBY to LEADER for {}", clusterName, e);
-      if (stateTransitionFuture != null && !stateTransitionFuture.isDone()) {
-        stateTransitionFuture.cancel(true);
-      }
+      throw new VeniceException(e);
+    } catch (ExecutionException | TimeoutException e) {
+      abortStateTransition(initializationAttempt, stateTransitionFuture);
+      LOGGER.error("Failed to execute the controller state transition from STANDBY to LEADER for {}", clusterName, e);
       throw new VeniceException(e);
     }
+  }
+
+  private LeaderInitializationAttempt newLeaderInitializationAttempt() {
+    synchronized (lifecycleLock) {
+      if (activeInitialization != null) {
+        throw new VeniceException("Leader initialization is already active for cluster " + clusterName);
+      }
+      LeaderInitializationAttempt attempt = new LeaderInitializationAttempt();
+      activeInitialization = attempt;
+      return attempt;
+    }
+  }
+
+  private void initializeAsLeader(LeaderInitializationAttempt attempt, String controllerName) throws Exception {
+    attempt.started.set(true);
+    boolean published = false;
+    try {
+      awaitPreviousCleanup();
+      ensureAttemptIsActive(attempt);
+      synchronized (lifecycleLock) {
+        if (helixManagerInitialized()) {
+          throw new VeniceException(
+              String.format(
+                  "Helix manager already exists for instance %s on cluster %s while controller %s is becoming leader",
+                  helixManager.getInstanceName(),
+                  clusterName,
+                  controllerName));
+        }
+      }
+
+      SafeHelixManager attemptManager = createHelixManager(controllerName);
+      attempt.helixManager = attemptManager;
+      ensureAttemptIsActive(attempt);
+      attemptManager.connect();
+      ensureAttemptIsActive(attempt);
+      attemptManager.startTimerTasks();
+
+      HelixVeniceClusterResources attemptResources = createClusterResources(attemptManager);
+      attempt.clusterResources = attemptResources;
+      initializeClusterResources(attempt, attemptResources);
+
+      synchronized (lifecycleLock) {
+        ensureAttemptIsActive(attempt);
+        helixManager = attemptManager;
+        clusterResources = attemptResources;
+        activeInitialization = null;
+        published = true;
+      }
+      LOGGER.info(
+          "Controller {} with instance {} is the leader of cluster {}",
+          controllerName,
+          attemptManager.getInstanceName(),
+          clusterName);
+    } finally {
+      if (!published) {
+        cleanupUnpublishedAttempt(attempt);
+      }
+    }
+  }
+
+  private void initializeClusterResources(
+      LeaderInitializationAttempt attempt,
+      HelixVeniceClusterResources attemptResources) {
+    attemptResources.refresh();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startErrorPartitionResetTask();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startDeadStoreStatsPreFetchTask();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startLeakedPushStatusCleanUpService();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startProtocolVersionAutoDetectionService();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startLogCompactionService();
+    ensureAttemptIsActive(attempt);
+    attemptResources.startMultiTaskSchedulerService();
+    ensureAttemptIsActive(attempt);
+  }
+
+  private void awaitPreviousCleanup() throws InterruptedException, ExecutionException {
+    Future<?> cleanupFuture = latestCleanupFuture;
+    if (cleanupFuture != null) {
+      cleanupFuture.get();
+    }
+  }
+
+  private void ensureAttemptIsActive(LeaderInitializationAttempt attempt) {
+    synchronized (lifecycleLock) {
+      if (attempt.aborted.get() || activeInitialization != attempt) {
+        throw new VeniceException("Leader initialization is no longer active for cluster " + clusterName);
+      }
+    }
+  }
+
+  private void abortStateTransition(LeaderInitializationAttempt attempt, Future<?> stateTransitionFuture) {
+    attempt.aborted.set(true);
+    if (stateTransitionFuture != null && !stateTransitionFuture.isDone()) {
+      stateTransitionFuture.cancel(true);
+    }
+    if (!attempt.started.get()) {
+      synchronized (lifecycleLock) {
+        if (activeInitialization == attempt && !attempt.started.get()) {
+          activeInitialization = null;
+        }
+      }
+    }
+    submitCleanup(detachPublishedResources(), attempt);
   }
 
   private boolean helixManagerInitialized() {
     return helixManager != null && helixManager.isConnected();
   }
 
-  /** synchronized to prevent race conditions with reset() during shutdown */
   @VisibleForTesting
-  synchronized void initHelixManager(String controllerName) throws Exception {
-    if (helixManagerInitialized()) {
-      throw new VeniceException(
-          String.format(
-              "Helix manager has been initialized with instance %s for cluster %s",
-              helixManager.getInstanceName(),
-              clusterName));
-    }
+  SafeHelixManager createHelixManager(String controllerName) {
     InstanceType instanceType =
         clusterConfig.isVeniceClusterLeaderHAAS() ? InstanceType.SPECTATOR : InstanceType.CONTROLLER;
-    helixManager = new SafeHelixManager(
+    return new SafeHelixManager(
         HelixManagerFactory.getZKHelixManager(clusterName, controllerName, instanceType, zkClient.getServers()));
-    helixManager.connect();
-    helixManager.startTimerTasks();
   }
 
-  /** synchronized to prevent race conditions with reset() during shutdown */
   @VisibleForTesting
-  synchronized void initClusterResources() {
-    if (!helixManagerInitialized()) {
-      throw new VeniceException("Helix manager should have been initialized for " + clusterName);
-    }
+  HelixVeniceClusterResources createClusterResources(SafeHelixManager attemptManager) {
     VeniceVersionLifecycleEventManager versionLifecycleEventManager = new VeniceVersionLifecycleEventManager();
     versionLifecycleEventListeners.ifPresent(listeners -> listeners.forEach(versionLifecycleEventManager::addListener));
-    clusterResources = new HelixVeniceClusterResources(
+    return new HelixVeniceClusterResources(
         clusterName,
         zkClient,
         adapterSerializer,
-        helixManager,
+        attemptManager,
         clusterConfig,
         admin,
         metricsRepository,
@@ -274,13 +355,6 @@ public class VeniceControllerStateModel extends StateModel {
         accessController,
         helixAdminClient,
         versionLifecycleEventManager);
-    clusterResources.refresh();
-    clusterResources.startErrorPartitionResetTask();
-    clusterResources.startDeadStoreStatsPreFetchTask();
-    clusterResources.startLeakedPushStatusCleanUpService();
-    clusterResources.startProtocolVersionAutoDetectionService();
-    clusterResources.startLogCompactionService();
-    clusterResources.startMultiTaskSchedulerService();
   }
 
   /**
@@ -302,7 +376,7 @@ public class VeniceControllerStateModel extends StateModel {
      * metadata is already cleared and not able to serve. This often results in returning 404 or store not found for
      * a store that actually exists.
      */
-    executeStateTransitionAsync(message, this::reset);
+    reset();
   }
 
   /**
@@ -372,39 +446,96 @@ public class VeniceControllerStateModel extends StateModel {
    * Called when the state model is reset.
    */
   @Override
-  public synchronized void reset() {
-    if (clusterResources != null) {
-      try (AutoCloseableLock ignore = clusterResources.lockForShutdown()) {
-        clearResources();
-        closeHelixManager();
+  public void reset() {
+    LeaderInitializationAttempt attempt;
+    synchronized (lifecycleLock) {
+      if (closed) {
+        LOGGER.warn("Skipping reset for cluster {} because the state model is already closed", clusterName);
+        return;
+      }
+      attempt = activeInitialization;
+      if (attempt != null) {
+        attempt.aborted.set(true);
+        Future<?> initializationFuture = attempt.future;
+        if (initializationFuture != null && !initializationFuture.isDone()) {
+          initializationFuture.cancel(true);
+        }
+      }
+    }
+    submitCleanup(detachPublishedResources(), attempt);
+  }
+
+  private CleanupSnapshot detachPublishedResources() {
+    synchronized (lifecycleLock) {
+      CleanupSnapshot snapshot = new CleanupSnapshot(clusterResources, helixManager);
+      clusterResources = null;
+      helixManager = null;
+      return snapshot;
+    }
+  }
+
+  private void submitCleanup(CleanupSnapshot cleanupSnapshot, LeaderInitializationAttempt attempt) {
+    synchronized (lifecycleLock) {
+      if (cleanupService.isShutdown()) {
+        return;
+      }
+      latestCleanupFuture = cleanupService.submit(() -> {
+        cleanupPublishedResources(cleanupSnapshot);
+        disconnectAttemptManager(attempt);
+      });
+    }
+  }
+
+  private void cleanupUnpublishedAttempt(LeaderInitializationAttempt attempt) {
+    try {
+      HelixVeniceClusterResources resources = attempt.clusterResources;
+      if (resources != null) {
+        try (AutoCloseableLock ignore = resources.lockForShutdown()) {
+          clearResources(resources);
+        }
+      }
+    } finally {
+      disconnectAttemptManager(attempt);
+      synchronized (lifecycleLock) {
+        if (activeInitialization == attempt) {
+          activeInitialization = null;
+        }
       }
     }
   }
 
-  /** synchronized because concurrent calls could cause a NPE */
-  private synchronized void closeHelixManager() {
-    if (helixManager != null) {
-      helixManager.disconnect();
-      helixManager = null;
+  private void cleanupPublishedResources(CleanupSnapshot cleanupSnapshot) {
+    try {
+      if (cleanupSnapshot.clusterResources != null) {
+        try (AutoCloseableLock ignore = cleanupSnapshot.clusterResources.lockForShutdown()) {
+          clearResources(cleanupSnapshot.clusterResources);
+        }
+      }
+    } finally {
+      if (cleanupSnapshot.helixManager != null) {
+        cleanupSnapshot.helixManager.disconnect();
+      }
     }
   }
 
-  /** synchronized because concurrent calls could cause a NPE */
-  private synchronized void clearResources() {
-    if (clusterResources != null) {
-      clusterResources.stopMultiTaskSchedulerService();
-      clusterResources.stopLogCompactionService();
-      clusterResources.stopProtocolVersionAutoDetectionService();
-      /**
-       * Leaked push status clean up service depends on VeniceHelixAdmin, so VeniceHelixAdmin should be stopped after
-       * its dependent service.
-       */
-      clusterResources.stopLeakedPushStatusCleanUpService();
-      clusterResources.stopDeadStoreStatsPreFetchTask();
-      clusterResources.stopErrorPartitionResetTask();
-      clusterResources.clear();
-      clusterResources = null;
+  private void disconnectAttemptManager(LeaderInitializationAttempt attempt) {
+    if (attempt != null && attempt.helixManager != null && attempt.managerDisconnected.compareAndSet(false, true)) {
+      attempt.helixManager.disconnect();
     }
+  }
+
+  private void clearResources(HelixVeniceClusterResources resources) {
+    resources.stopMultiTaskSchedulerService();
+    resources.stopLogCompactionService();
+    resources.stopProtocolVersionAutoDetectionService();
+    /**
+     * Leaked push status clean up service depends on VeniceHelixAdmin, so VeniceHelixAdmin should be stopped after
+     * its dependent service.
+     */
+    resources.stopLeakedPushStatusCleanUpService();
+    resources.stopDeadStoreStatsPreFetchTask();
+    resources.stopErrorPartitionResetTask();
+    resources.clear();
   }
 
   /**
@@ -445,10 +576,44 @@ public class VeniceControllerStateModel extends StateModel {
   }
 
   /**
-   * Shutdown the internal executor service.
+   * Clean up controller-cluster resources before shutting down dependent services.
    */
   public void close() {
-    workerService.shutdown();
+    LeaderInitializationAttempt attempt;
+    synchronized (lifecycleLock) {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      attempt = activeInitialization;
+      if (attempt != null) {
+        attempt.aborted.set(true);
+      }
+      workerService.shutdownNow();
+    }
+
+    Future<?> cleanupFuture = cleanupService.submit(() -> {
+      cleanupPublishedResources(detachPublishedResources());
+      disconnectAttemptManager(attempt);
+    });
+    cleanupService.shutdown();
+
+    long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CLOSE_TIMEOUT_MS);
+    try {
+      cleanupFuture.get(CLOSE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+      long remainingNs = deadlineNs - System.nanoTime();
+      if (remainingNs <= 0 || !workerService.awaitTermination(remainingNs, TimeUnit.NANOSECONDS)) {
+        throw new VeniceException("Timed out waiting for controller state model worker for cluster " + clusterName);
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new VeniceException("Interrupted while closing controller state model for cluster " + clusterName, e);
+    } catch (ExecutionException e) {
+      throw new VeniceException("Failed to close controller state model for cluster " + clusterName, e.getCause());
+    } catch (TimeoutException e) {
+      cleanupService.shutdownNow();
+      throw new VeniceException("Timed out closing controller state model for cluster " + clusterName, e);
+    }
   }
 
   @VisibleForTesting
@@ -471,8 +636,22 @@ public class VeniceControllerStateModel extends StateModel {
     return workerService;
   }
 
-  @VisibleForTesting
-  void setStateTransitionTimeout(long timeoutMs) {
-    this.stateTransitionTimeoutMs = timeoutMs;
+  private static class LeaderInitializationAttempt {
+    private final AtomicBoolean aborted = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean managerDisconnected = new AtomicBoolean(false);
+    private volatile Future<?> future;
+    private volatile SafeHelixManager helixManager;
+    private volatile HelixVeniceClusterResources clusterResources;
+  }
+
+  private static class CleanupSnapshot {
+    private final HelixVeniceClusterResources clusterResources;
+    private final SafeHelixManager helixManager;
+
+    private CleanupSnapshot(HelixVeniceClusterResources clusterResources, SafeHelixManager helixManager) {
+      this.clusterResources = clusterResources;
+      this.helixManager = helixManager;
+    }
   }
 }
